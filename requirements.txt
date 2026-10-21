@@ -4,3 +4,7 @@ openpyxl
 xlsxwriter
 Unidecode
 xlrd
+plotly
+PyGithub
+lxml
+beautifulsoup4
