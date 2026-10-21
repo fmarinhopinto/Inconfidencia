@@ -344,6 +344,76 @@ def load_uploaded_file(file_obj):
 
 
 # ---------------------------------------------------------
+# AUTENTICAÇÃO E CONTROLE DE ACESSO NATIVO
+# ---------------------------------------------------------
+CREDENCIAIS = {
+    "cliente": "inconfidencia2026",
+    "admin": "inconfidencia2026",
+    "inconfidencia": "fortpel2026",
+    "fortpel": "fortpel2026"
+}
+
+if "autenticado" not in st.session_state:
+    st.session_state["autenticado"] = False
+if "usuario_conectado" not in st.session_state:
+    st.session_state["usuario_conectado"] = ""
+
+def exibir_tela_login():
+    # Oculta a barra lateral durante o login para uma interface limpa e focada
+    st.markdown("""
+    <style>
+        [data-testid="stSidebar"] { display: none !important; }
+        [data-testid="collapsedControl"] { display: none !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col_vazia1, col_login, col_vazia2 = st.columns([1, 1.2, 1])
+    with col_login:
+        col_l1, col_l2 = st.columns(2)
+        try:
+            path_fortpel = "logo_fortpel.png" if os.path.exists("logo_fortpel.png") else ("logo_fortpel.png.png" if os.path.exists("logo_fortpel.png.png") else None)
+            if path_fortpel:
+                col_l1.image(Image.open(path_fortpel), use_container_width=True)
+            path_inconfidencia = "logo_inconfidencia.png" if os.path.exists("logo_inconfidencia.png") else ("logo_inconfidencia.png.jfif" if os.path.exists("logo_inconfidencia.png.jfif") else None)
+            if path_inconfidencia:
+                col_l2.image(Image.open(path_inconfidencia), use_container_width=True)
+        except Exception:
+            pass
+
+        st.markdown("""
+        <div style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 24px 20px 8px 20px; box-shadow: 0 4px 14px rgba(0,0,0,0.06); margin-top: 15px; margin-bottom: 20px; text-align: center;">
+            <h2 style="font-size: 1.4rem; font-weight: 700; color: #1E293B; margin-bottom: 4px;">
+                Portal Comercial
+            </h2>
+            <p style="font-size: 0.9rem; color: #64748B; margin-bottom: 12px;">
+                Digite seu usuário e senha para acessar os relatórios de faturamento.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.form("form_login", clear_on_submit=False):
+            usuario_input = st.text_input("Usuário", placeholder="Ex: cliente").strip().lower()
+            senha_input = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+            botao_entrar = st.form_submit_button("Entrar no Sistema", use_container_width=True)
+
+            if botao_entrar:
+                if usuario_input in CREDENCIAIS and CREDENCIAIS[usuario_input] == senha_input:
+                    st.session_state["autenticado"] = True
+                    st.session_state["usuario_conectado"] = usuario_input
+                    st.success("✅ Acesso autorizado! Carregando dashboard...")
+                    st.rerun()
+                else:
+                    st.error("❌ Usuário ou senha incorretos.")
+
+if not st.session_state["autenticado"]:
+    exibir_tela_login()
+    st.stop()
+
+
+# ---------------------------------------------------------
 # 2. INTERFACE E UPLOADS NA SIDEBAR
 # ---------------------------------------------------------
 col1, col2 = st.sidebar.columns(2)
@@ -364,6 +434,21 @@ try:
         col2.markdown("<div style='background:rgba(255,255,255,0.1); border-radius:6px; padding:6px; text-align:center;'><small style='color:#FFFFFF;'><b>[Falta logo_inconfidencia.png]</b></small></div>", unsafe_allow_html=True)
 except Exception as e:
     st.sidebar.warning(f"Erro ao carregar logos: {e}")
+
+# Card de sessão e botão de Logout
+usuario_ativo = st.session_state.get('usuario_conectado', 'cliente').capitalize()
+st.sidebar.markdown(f"""
+<div style="background: rgba(255,255,255,0.12); padding: 6px 10px; border-radius: 6px; margin: 8px 0; text-align: center;">
+    <small style="color: #FFFFFF;">👤 Conectado: <b>{usuario_ativo}</b></small>
+</div>
+""", unsafe_allow_html=True)
+
+if st.sidebar.button("🚪 Sair (Logout)", use_container_width=True):
+    st.session_state["autenticado"] = False
+    st.session_state["usuario_conectado"] = ""
+    st.rerun()
+
+st.sidebar.markdown("---")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📅 Período do Relatório")
