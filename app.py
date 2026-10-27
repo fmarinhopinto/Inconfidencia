@@ -18,6 +18,23 @@ try:
 except ImportError:
     ftfy = None
 
+# Módulo de Banco de Dados Analítico DuckDB
+from modules.db_manager import (
+    DB_PATH,
+    init_db,
+    run_query,
+    table_exists,
+    get_table_row_count,
+    ingest_sheet,
+    ingest_default_files_if_needed,
+    get_last_ingestion_info,
+    reset_database
+)
+
+# Inicialização e auto-ingestão do DuckDB no startup
+init_db()
+ingest_default_files_if_needed()
+
 # ---------------------------------------------------------
 # 1. CONFIGURAÇÃO DA PÁGINA
 # ---------------------------------------------------------
@@ -890,6 +907,20 @@ st.sidebar.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# Indicador do Motor DuckDB e Link para Página de Ingestão
+tamanho_duckdb_mb = round(os.path.getsize(DB_PATH) / (1024 * 1024), 2) if os.path.exists(DB_PATH) else 0.0
+total_linhas_db = get_table_row_count("acompanhamento") + get_table_row_count("dados_bi") + get_table_row_count("unidades")
+st.sidebar.markdown(f"""
+<div style="background: rgba(15, 23, 42, 0.45); border: 1px solid rgba(56, 189, 248, 0.3); padding: 6px 10px; border-radius: 6px; margin-bottom: 8px; text-align: center;">
+    <small style="color: #38BDF8;">⚡ <b>DuckDB:</b> {total_linhas_db:,} reg ({tamanho_duckdb_mb} MB)</small>
+</div>
+""".replace(",", "."), unsafe_allow_html=True)
+
+try:
+    st.sidebar.page_link("pages/01_Upload_e_Carga.py", label="⚡ Ingestão & Gestão (DuckDB)", icon="⚡")
+except Exception:
+    pass
+
 if st.sidebar.button("🚪 Sair (Logout)", use_container_width=True):
     st.session_state["autenticado"] = False
     st.session_state["usuario_conectado"] = ""
@@ -940,7 +971,7 @@ if st.session_state.get("perfil") == "admin":
             help="Suba aqui a planilha com os números de NF emitidas antes do corte."
         )
 
-        if st.button("💾 Salvar Bases na Nuvem", use_container_width=True):
+        if st.button("💾 Salvar Bases na Nuvem & DuckDB", use_container_width=True):
             arquivos_salvos = []
             if upload_unidades is not None:
                 ext_unid = os.path.splitext(upload_unidades.name)[1].lower()
@@ -949,21 +980,25 @@ if st.session_state.get("perfil") == "admin":
                 nome_listagem = f"listagem_unidades{ext_unid}"
                 with open(nome_listagem, "wb") as f:
                     f.write(upload_unidades.getbuffer())
+                ingest_sheet(upload_unidades, table_name="listagem_unidades", mode="replace")
                 arquivos_salvos.append("1. Listagem de Unidades")
 
             if upload_pedidos is not None:
                 with open("acompanhamento.xlsx", "wb") as f:
                     f.write(upload_pedidos.getbuffer())
+                ingest_sheet(upload_pedidos, table_name="acompanhamento", mode="replace")
                 arquivos_salvos.append("2. Relatório de Pedidos / Itens")
 
             if upload_faturamento is not None:
                 with open("dados_bi.xlsx", "wb") as f:
                     f.write(upload_faturamento.getbuffer())
+                ingest_sheet(upload_faturamento, table_name="dados_bi", mode="replace")
                 arquivos_salvos.append("3. Base de Faturamento / BI")
 
             if upload_controle is not None:
                 with open("unidades.xlsx", "wb") as f:
                     f.write(upload_controle.getbuffer())
+                ingest_sheet(upload_controle, table_name="unidades", mode="replace")
                 arquivos_salvos.append("4. Controle de Emissão")
 
             if upload_emergencial is not None:
@@ -973,17 +1008,19 @@ if st.session_state.get("perfil") == "admin":
                 nome_nf_emerg = f"nf_emergencial{ext_nf}"
                 with open(nome_nf_emerg, "wb") as f:
                     f.write(upload_emergencial.getbuffer())
+                ingest_sheet(upload_emergencial, table_name="nf_emergencial", mode="replace")
                 arquivos_salvos.append("5. Base Emergencial (NFs Pré-Corte)")
 
             if arquivos_salvos:
                 st.cache_data.clear()
-                st.sidebar.success(f"✅ Bases salvas e atualizadas na nuvem: {', '.join(arquivos_salvos)}!")
+                st.sidebar.success(f"✅ Bases gravadas no DuckDB e salvas na nuvem: {', '.join(arquivos_salvos)}!")
                 st.rerun()
             else:
                 st.sidebar.warning("⚠️ Selecione pelo menos uma planilha para salvar.")
 
         st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
         if st.button("🗑️ Limpar / Resetar Base de Dados", use_container_width=True, type="secondary"):
+            reset_database()
             arquivos_para_remover = [
                 'acompanhamento.xlsx',
                 'dados_bi.xlsx',
@@ -1004,7 +1041,7 @@ if st.session_state.get("perfil") == "admin":
                     except Exception:
                         pass
             st.cache_data.clear()
-            st.sidebar.success("✅ Base de dados limpa com sucesso!")
+            st.sidebar.success("✅ Base de dados e DuckDB limpos com sucesso!")
             st.rerun()
 
 # Aliases de compatibilidade interna
@@ -1047,11 +1084,18 @@ file_listagem_unidades_fixo = 'listagem_unidades.xlsx' if os.path.exists('listag
 # ---------------------------------------------------------
 # 3. PROCESSAMENTO E REGRAS DE NEGÓCIO
 # ---------------------------------------------------------
-@st.cache_data(show_spinner="Processando as três planilhas...")
-def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v7_perfis_acesso", _mtime=None):
-    # Leitura dos arquivos principais
-    df_acomp_raw = load_uploaded_file(file_acomp)
-    df_bi_raw = load_uploaded_file(file_bi_data)
+@st.cache_data(show_spinner="Processando base analítica (DuckDB)...")
+def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v8_duckdb_performance", _mtime=None):
+    # Leitura de alta performance via DuckDB com fallback para uploads em memória
+    if not (isinstance(file_acomp, io.BytesIO) or hasattr(file_acomp, "read")) and table_exists("acompanhamento"):
+        df_acomp_raw = run_query("SELECT * FROM acompanhamento")
+    else:
+        df_acomp_raw = load_uploaded_file(file_acomp)
+
+    if not (isinstance(file_bi_data, io.BytesIO) or hasattr(file_bi_data, "read")) and table_exists("dados_bi"):
+        df_bi_raw = run_query("SELECT * FROM dados_bi")
+    else:
+        df_bi_raw = load_uploaded_file(file_bi_data)
 
     # --- 3.1 PROCESSAR ACOMPANHAMENTO ---
     col_cliente_acomp = find_column(df_acomp_raw, ["nome_cliente", "cliente", "nome cliente"])
@@ -1212,29 +1256,32 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v7_pe
     df_merged["dt_nota_hist"] = np.where(is_faturado, dt_faturado_str, "-")
 
     # --- 3.4 LEITURA DA 3ª PLANILHA E MERGE DEFINITIVO (Base <-> Relatório de Unidades) ---
-    if isinstance(file_unid_data, str):
-        with open(file_unid_data, "rb") as f:
-            file_unidades_target = io.BytesIO(f.read())
-        file_unidades_target.name = file_unid_data
+    if not (isinstance(file_unid_data, io.BytesIO) or hasattr(file_unid_data, "read")) and table_exists("unidades"):
+        df_unidades = run_query("SELECT * FROM unidades")
     else:
-        file_unidades_target = file_unid_data if 'file_unid_data' in locals() and file_unid_data is not None else file_unidades
-        if hasattr(file_unidades_target, "seek"):
-            file_unidades_target.seek(0)
+        if isinstance(file_unid_data, str):
+            with open(file_unid_data, "rb") as f:
+                file_unidades_target = io.BytesIO(f.read())
+            file_unidades_target.name = file_unid_data
+        else:
+            file_unidades_target = file_unid_data if 'file_unid_data' in locals() and file_unid_data is not None else file_unidades
+            if hasattr(file_unidades_target, "seek"):
+                file_unidades_target.seek(0)
 
-    try:
-        # Lê a 3ª planilha contornando o formato HTML/XLS exportado pelo ERP
-        tables = pd.read_html(file_unidades_target, decimal=',', thousands='.')
-        df_unidades = max(tables, key=lambda t: t.shape[0] * t.shape[1]) if tables else tables[0]
-        # Achata o cabeçalho caso venha MultiIndex ("RELATÓRIO PORTAL", "Codigo pedido")
-        if isinstance(df_unidades.columns, pd.MultiIndex):
-            df_unidades.columns = df_unidades.columns.get_level_values(-1)
-    except Exception:
-        file_unidades_target.seek(0)
         try:
-            df_unidades = pd.read_excel(file_unidades_target, skiprows=1) # Fallback padrão pulando título
+            # Lê a 3ª planilha contornando o formato HTML/XLS exportado pelo ERP
+            tables = pd.read_html(file_unidades_target, decimal=',', thousands='.')
+            df_unidades = max(tables, key=lambda t: t.shape[0] * t.shape[1]) if tables else tables[0]
+            # Achata o cabeçalho caso venha MultiIndex ("RELATÓRIO PORTAL", "Codigo pedido")
+            if isinstance(df_unidades.columns, pd.MultiIndex):
+                df_unidades.columns = df_unidades.columns.get_level_values(-1)
         except Exception:
             file_unidades_target.seek(0)
-            df_unidades = pd.read_excel(file_unidades_target)
+            try:
+                df_unidades = pd.read_excel(file_unidades_target, skiprows=1) # Fallback padrão pulando título
+            except Exception:
+                file_unidades_target.seek(0)
+                df_unidades = pd.read_excel(file_unidades_target)
 
     # Limpa espaços e nomes das colunas
     df_unidades.columns = [str(c).strip() for c in df_unidades.columns]
@@ -1298,17 +1345,23 @@ def base_valida(b):
         return os.path.exists(b)
     return hasattr(b, "read") or hasattr(b, "seek")
 
-# Verifica se os arquivos existem no servidor ou foram enviados via upload
-if base_valida(file_acompanhamento) and base_valida(file_bi) and base_valida(file_unidades):
+tem_duckdb = table_exists("acompanhamento") and table_exists("dados_bi") and table_exists("unidades")
+tem_arquivos = base_valida(file_acompanhamento) and base_valida(file_bi) and base_valida(file_unidades)
+
+# Executa o processamento via DuckDB ou arquivos disponíveis
+if tem_duckdb or tem_arquivos:
     def get_file_mtime(f):
         if isinstance(f, str) and os.path.exists(f):
             return os.path.getmtime(f)
         return getattr(f, "size", getattr(f, "name", 0))
 
+    db_mtime = os.path.getmtime(DB_PATH) if os.path.exists(DB_PATH) else 0.0
+
     mtimes = (
         get_file_mtime(file_acompanhamento),
         get_file_mtime(file_bi),
-        get_file_mtime(file_unidades)
+        get_file_mtime(file_unidades),
+        db_mtime
     )
     df_merged, df_bi_raw, df_unidades_unique, col_ped, col_uni = process_data(file_acompanhamento, file_bi, file_unidades, _mtime=mtimes)
     df_unidades = df_unidades_unique
@@ -1962,17 +2015,23 @@ with tab3:
     st.markdown("### Controle de Emissão de Pedidos - Visão Trimestral")
     st.caption("Consolidação trimestral automática (últimos 3 meses até a data presente) cruzando a listagem mestre de unidades com os relatórios de pedidos do portal.")
 
+    tem_listagem_db = table_exists("listagem_unidades")
+    tem_unidades_db = table_exists("unidades")
+
     arquivo_listagem_alvo = file_listagem_unidades if file_listagem_unidades is not None else file_listagem_unidades_fixo
     arquivo_pedidos_alvo = file_unidades if file_unidades is not None else ('unidades.xlsx' if os.path.exists('unidades.xlsx') else None)
 
-    if not arquivo_listagem_alvo:
+    if not tem_listagem_db and not arquivo_listagem_alvo:
         st.warning("⚠️ Por favor, faça o upload da 'Listagem de Unidades' na área administrativa da barra lateral para visualizar o controle trimestral.")
-    elif not arquivo_pedidos_alvo:
+    elif not tem_unidades_db and not arquivo_pedidos_alvo:
         st.warning("⚠️ O relatório de pedidos do portal ('unidades.xlsx') não foi encontrado no servidor.")
     else:
         try:
-            # 1. Carrega Cadastro Mestre de Unidades (4ª Planilha)
-            df_cad_raw = load_uploaded_file(arquivo_listagem_alvo)
+            # 1. Carrega Cadastro Mestre de Unidades (DuckDB de alta performance com fallback para upload)
+            if not (isinstance(arquivo_listagem_alvo, io.BytesIO) or hasattr(arquivo_listagem_alvo, "read")) and tem_listagem_db:
+                df_cad_raw = run_query("SELECT * FROM listagem_unidades")
+            else:
+                df_cad_raw = load_uploaded_file(arquivo_listagem_alvo)
             col_nome_cad = [c for c in df_cad_raw.columns if str(c).strip().lower() in ['nome', 'unidade', 'razao social']][0] if any(str(c).strip().lower() in ['nome', 'unidade', 'razao social'] for c in df_cad_raw.columns) else df_cad_raw.columns[0]
             col_ativo_cad = [c for c in df_cad_raw.columns if str(c).strip().lower() in ['ativo', 'situacao', 'status']][0] if any(str(c).strip().lower() in ['ativo', 'situacao', 'status'] for c in df_cad_raw.columns) else None
 
@@ -1991,8 +2050,11 @@ with tab3:
             # Aplicação nas colunas de unidades com sanitização avançada
             df_unidades['Unidade_Clean'] = df_unidades['Unidade'].apply(limpar_texto_corrompido)
 
-            # 2. Carrega Relatório de Pedidos do Portal (3ª Planilha)
-            df_ped_raw = load_uploaded_file(arquivo_pedidos_alvo)
+            # 2. Carrega Relatório de Pedidos do Portal (DuckDB de alta performance com fallback para upload)
+            if not (isinstance(arquivo_pedidos_alvo, io.BytesIO) or hasattr(arquivo_pedidos_alvo, "read")) and tem_unidades_db:
+                df_ped_raw = run_query("SELECT * FROM unidades")
+            else:
+                df_ped_raw = load_uploaded_file(arquivo_pedidos_alvo)
             if isinstance(df_ped_raw.columns, pd.MultiIndex):
                 df_ped_raw.columns = df_ped_raw.columns.get_level_values(-1)
 

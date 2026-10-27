@@ -1,0 +1,49 @@
+# Arquivos temporários e pastas locais internas
+INC/
+temp/
+*.pdf
+*.jpg
+*.jpeg
+*.jfif
+*.mdb
+*.accdb
+
+# Arquivos de dados padrão (ignora planilhas extras)
+*.xlsx
+*.xls
+*.csv
+*.parquet
+
+# Bases de dados raiz necessárias para o deploy no Streamlit Cloud
+!acompanhamento.xlsx
+!dados_bi.xlsx
+!unidades.xlsx
+!unidades.xls
+!listagem_unidades.xlsx
+!listagem_unidades.xls
+!listagem_unidades.csv
+
+# Banco Analítico DuckDB
+!data/
+!data/dashboard_data.duckdb
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Ambientes virtuais
+.venv/
+venv/
+ENV/
+env/
+
+# IDE e sistema operacional
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs e arquivos de setup temporários
+*.log

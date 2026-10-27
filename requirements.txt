@@ -8,3 +8,6 @@ plotly
 PyGithub
 lxml
 beautifulsoup4
+ftfy
+duckdb
+sqlalchemy
