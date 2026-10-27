@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul
+cd /d "%~dp0"
 title Atualizador Automático - Dashboard Grupo Fortpel & Inconfidência
 color 0b
 
