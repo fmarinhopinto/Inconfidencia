@@ -5,6 +5,7 @@ color 0b
 
 echo ======================================================================
 echo    ATUALIZADOR AUTOMÁTICO - GRUPO FORTPEL & INCONFIDÊNCIA
+echo    Repositório: https://github.com/fmarinhopinto/Inconfidencia
 echo ======================================================================
 echo.
 
@@ -29,77 +30,56 @@ if %ERRORLEVEL% neq 0 (
 echo [OK] Git detectado com sucesso.
 echo.
 
-:: 2. Verifica se o repositório Git local existe
-if not exist ".git" (
-    echo [*] Inicializando repositório local...
-    %GIT_CMD% init -b main
-    %GIT_CMD% config user.name "Filipe Marinho"
-    %GIT_CMD% config user.email "filipe.marinho@inconfidencia.com"
-)
-
-:: 3. Verifica se o remote origin está configurado
+:: 2. Garante vínculo com o repositório oficial
+set REPO_URL=https://github.com/fmarinhopinto/Inconfidencia.git
 %GIT_CMD% remote get-url origin >nul 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo ======================================================================
-    echo   CONFIGURAÇÃO INICIAL DO REPOSITÓRIO GITHUB
-    echo ======================================================================
-    echo O seu projeto ainda não está conectado ao seu repositório no GitHub.
-    echo.
-    echo Cole abaixo o link do seu repositório GitHub:
-    echo (Exemplo: https://github.com/seu-usuario/inconfidencia-fortpel.git)
-    echo.
-    set /p REPO_URL="Link do GitHub: "
-    if "%REPO_URL%"=="" (
-        color 0c
-        echo [AVISO] Nenhuma URL informada. A sincronização foi cancelada.
-        pause
-        exit /b 1
-    )
+    echo [*] Vinculando repositório remoto: %REPO_URL%
     %GIT_CMD% remote add origin %REPO_URL%
-    echo [OK] Repositório remoto configurado!
-    echo.
+) else (
+    %GIT_CMD% remote set-url origin %REPO_URL%
 )
 
-:: 4. Adiciona arquivos modificados e banco de dados
-echo [*] Coletando arquivos alterados e banco DuckDB...
+:: 3. Adiciona arquivos modificados e banco de dados DuckDB
+echo [*] Coletando arquivos alterados e banco de dados...
 %GIT_CMD% add .
 
-:: 5. Verifica se há algo para commitar
+:: 4. Verifica se há algo para commitar
 %GIT_CMD% diff-index --quiet HEAD --
 if %ERRORLEVEL% equ 0 (
-    echo [INFO] Nenhuma alteração pendente detectada no momento.
+    echo [INFO] Nenhuma nova alteração nos arquivos locais.
 ) else (
-    echo [*] Registrando alterações no histórico...
+    echo [*] Registrando alterações...
     %GIT_CMD% commit -m "Atualizacao automatica - %date% %time%"
 )
 
-:: 6. Envia para o GitHub
+:: 5. Envia para o GitHub
 echo.
-echo [*] Sincronizando com o GitHub...
-echo (Se for a primeira vez, poderá abrir uma janela no navegador para autorizar)
+echo [*] Enviando atualizações para o GitHub...
+echo (Se for a primeira vez, uma janela de login do navegador poderá se abrir)
 echo.
-%GIT_CMD% push -u origin main
+%GIT_CMD% push origin main
 if %ERRORLEVEL% neq 0 (
     echo.
     color 0e
-    echo [!] Tentando sincronização com a branch atual...
-    %GIT_CMD% push -u origin HEAD
+    echo [!] Tentando reconciliar com a nuvem...
+    %GIT_CMD% push -u origin main
 )
 
 if %ERRORLEVEL% equ 0 (
     echo.
     color 0a
     echo ======================================================================
-    echo   [SUCESSO] Sincronização concluída com êxito!
+    echo   [SUCESSO] Sistema sincronizado com o GitHub com êxito!
     echo   O Streamlit Cloud já detectou as alterações e o dashboard
-    echo   online será atualizado automaticamente em instantes.
+    echo   online está sendo atualizado automaticamente.
     echo ======================================================================
 ) else (
     echo.
     color 0c
     echo ======================================================================
     echo   [ATENÇÃO] Houve uma falha ao enviar para o GitHub.
-    echo   Verifique sua conexão ou se o link do repositório está correto.
+    echo   Verifique se sua conta do GitHub possui permissão de gravação.
     echo ======================================================================
 )
 
