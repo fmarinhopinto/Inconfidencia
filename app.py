@@ -901,25 +901,36 @@ nome_exibicao = info_usuario["nome"]
 perfil_atual = st.session_state.get('perfil', 'cliente')
 badge_perfil = "Administrador" if perfil_atual == "admin" else "Cliente"
 
+# Oculta menus de multipages / páginas extras para usuários clientes
+if perfil_atual != "admin":
+    st.markdown("""
+    <style>
+        [data-testid="stSidebarNav"] { display: none !important; }
+        div[data-testid="stSidebarNav"] { display: none !important; }
+        ul[data-testid="stSidebarNavItems"] { display: none !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
 st.sidebar.markdown(f"""
 <div style="background: rgba(255,255,255,0.12); padding: 6px 10px; border-radius: 6px; margin: 8px 0; text-align: center;">
     <small style="color: #FFFFFF;">👤 <b>{nome_exibicao}</b> ({badge_perfil})</small>
 </div>
 """, unsafe_allow_html=True)
 
-# Indicador do Motor DuckDB e Link para Página de Ingestão
-tamanho_duckdb_mb = round(os.path.getsize(DB_PATH) / (1024 * 1024), 2) if os.path.exists(DB_PATH) else 0.0
-total_linhas_db = get_table_row_count("acompanhamento") + get_table_row_count("dados_bi") + get_table_row_count("unidades")
-st.sidebar.markdown(f"""
-<div style="background: rgba(15, 23, 42, 0.45); border: 1px solid rgba(56, 189, 248, 0.3); padding: 6px 10px; border-radius: 6px; margin-bottom: 8px; text-align: center;">
-    <small style="color: #38BDF8;">⚡ <b>DuckDB:</b> {total_linhas_db:,} reg ({tamanho_duckdb_mb} MB)</small>
-</div>
-""".replace(",", "."), unsafe_allow_html=True)
+# Link para Painel de Ingestão DuckDB (EXCLUSIVO ADMINISTRADOR)
+if perfil_atual == "admin":
+    tamanho_duckdb_mb = round(os.path.getsize(DB_PATH) / (1024 * 1024), 2) if os.path.exists(DB_PATH) else 0.0
+    total_linhas_db = get_table_row_count("acompanhamento") + get_table_row_count("dados_bi") + get_table_row_count("unidades")
+    st.sidebar.markdown(f"""
+    <div style="background: rgba(15, 23, 42, 0.45); border: 1px solid rgba(56, 189, 248, 0.3); padding: 6px 10px; border-radius: 6px; margin-bottom: 8px; text-align: center;">
+        <small style="color: #38BDF8;">⚡ <b>DuckDB:</b> {total_linhas_db:,} reg ({tamanho_duckdb_mb} MB)</small>
+    </div>
+    """.replace(",", "."), unsafe_allow_html=True)
 
-try:
-    st.sidebar.page_link("pages/01_Upload_e_Carga.py", label="⚡ Ingestão & Gestão (DuckDB)", icon="⚡")
-except Exception:
-    pass
+    try:
+        st.sidebar.page_link("pages/01_Upload_e_Carga.py", label="⚡ Ingestão & Gestão (DuckDB)", icon="⚡")
+    except Exception:
+        pass
 
 if st.sidebar.button("🚪 Sair (Logout)", use_container_width=True):
     st.session_state["autenticado"] = False
@@ -936,7 +947,7 @@ upload_faturamento = None
 upload_controle = None
 upload_emergencial = None
 
-if st.session_state.get("perfil") == "admin":
+if perfil_atual == "admin":
     with st.sidebar:
         st.markdown("---")
         st.header("📂 Carregamento de Bases")

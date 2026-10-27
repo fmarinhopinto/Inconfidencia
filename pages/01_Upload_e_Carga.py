@@ -32,6 +32,30 @@ st.set_page_config(
     layout="wide"
 )
 
+# ---------------------------------------------------------
+# CONTROLE DE ACESSO RESTRITO - EXCLUSIVO ADMINISTRADOR
+# ---------------------------------------------------------
+if not st.session_state.get("autenticado") or st.session_state.get("perfil") != "admin":
+    st.markdown("""
+    <div style="background: #FEF2F2; border: 1px solid #FCA5A5; border-radius: 10px; padding: 25px; margin: 30px auto; max-width: 650px; text-align: center;">
+        <h2 style="color: #991B1B; margin-top: 0;">⛔ Acesso Restrito ao Administrador</h2>
+        <p style="color: #7F1D1D; font-size: 1rem; margin-bottom: 20px;">
+            Esta área é destinada exclusivamente à gestão analítica e carga de dados pelo administrador. Usuários clientes não têm permissão para acessar esta seção.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    col_c1, col_c2, col_c3 = st.columns([1, 1.2, 1])
+    with col_c2:
+        try:
+            st.page_link("app.py", label="⬅️ Voltar ao Dashboard Comercial", icon="📊")
+        except Exception:
+            pass
+    st.stop()
+
+# Botão de retorno na barra lateral para o admin
+st.sidebar.page_link("app.py", label="📊 Voltar ao Dashboard Comercial", icon="📊")
+st.sidebar.markdown("---")
+
 # Inicializa o banco de dados
 init_db()
 
