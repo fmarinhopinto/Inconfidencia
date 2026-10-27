@@ -88,6 +88,49 @@ def limpar_id(val):
     return match.group(1) if match else texto
 
 
+def extrair_unidade_cirurgica(texto):
+    """
+    Extrai com alta precisão o nome da unidade a partir do campo 'Local de entrega':
+    1. Se houver '---- NOME DA UNIDADE' no final da string, extrai diretamente.
+    2. Caso contrário, recorta cirurgicamente logo após 'PED.: XXXXX - CÓDIGO - ' e antes do logradouro.
+    """
+    if pd.isna(texto) or texto is None:
+        return None
+    t = str(texto).strip()
+    
+    # 1. Estratégia de ouro: Se termina com ---- UNIDADE
+    m_fim = re.search(r'[-–—]{3,}\s*([A-Za-z0-9À-ÿ\s\.\-\(\)\/]+)$', t)
+    if m_fim:
+        res = m_fim.group(1).strip()
+        if len(res) > 3 and not re.match(r'^(?:RS|SC|PR|SP|RJ|MG|BRASIL)$', res, re.I):
+            return res
+
+    # 2. Estratégia de corte cirúrgico no miolo (após PED.: XXXXX - CÓDIGO - )
+    m = re.search(r'PED\.?:\s*\d+\s*[-–—]+\s*(?:\d+|-)\s*[-–—]+', t, re.IGNORECASE)
+    if m:
+        miolo = t[m.end():].strip()
+    else:
+        m2 = re.search(r'PED\.?:\s*\d+\s*[-–—]+', t, re.IGNORECASE)
+        miolo = t[m2.end():].strip() if m2 else t
+    
+    # Corta antes do logradouro
+    padroes_corte = [
+        r'\s*[-–—]+\s*RUA\b', r'\s*[-–—]+\s*RODOVIA\b', r'\s*[-–—]+\s*ROD\b',
+        r'\s*[-–—]+\s*AV\b', r'\s*[-–—]+\s*AVENIDA\b', r'\s*[-–—]+\s*PRACA\b',
+        r'\s*[-–—]+\s*PRAÇA\b', r'\s*[-–—]+\s*ESTRADA\b', r'\s*[-–—]+\s*TRAVESSA\b',
+        r'\s*[-–—]+\s*ALAMEDA\b', r'\s*[-–—]+\s*ACESSO\b', r'\s*[-–—]+\s*BR-\d+',
+        r'\s*[-–—]+\s*RS-\d+'
+    ]
+    for p in padroes_corte:
+        partes = re.split(p, miolo, flags=re.IGNORECASE)
+        if len(partes) > 1:
+            miolo = partes[0]
+            break
+            
+    miolo = re.sub(r'[-–—\s]+$', '', miolo).strip()
+    return miolo if miolo else None
+
+
 def normalizar_nome_coluna(col_name):
     """
     Gera um identificador de coluna limpo e compatível com SQL.
@@ -378,6 +421,20 @@ def ingest_sheet(file_path_or_buffer, table_name, mode="replace", original_filen
             if df[col].dtype == object:
                 df[col] = df[col].astype(str).apply(limpar_texto_corrompido)
 
+    # Tratamento automático de 'Local de entrega' (extração cirúrgica de Pedido e Unidade)
+    col_local_cand = next((c for c in df.columns if "entrega" in str(c).lower() or "local" in str(c).lower()), None)
+    if col_local_cand:
+        if "Pedido" not in df.columns and "Codigo pedido" not in df.columns:
+            df["Pedido"] = df[col_local_cand].astype(str).str.extract(r'PED\.?:\s*(\d+)', expand=False)
+            df["Pedido_Clean"] = df["Pedido"].apply(limpar_id)
+        
+        unid_rec = df[col_local_cand].apply(extrair_unidade_cirurgica)
+        if "Unidade" not in df.columns:
+            df["Unidade"] = unid_rec
+        else:
+            mask_subst = df["Unidade"].isna() | df["Unidade"].astype(str).str.strip().isin(["", "nan", "None"]) | df["Unidade"].astype(str).str.contains(r'INCONFID[EÊ]NCIA\s+LOCADORA', case=False, na=False)
+            df.loc[mask_subst & unid_rec.notna(), "Unidade"] = unid_rec
+
     # Criação de chaves auxiliares pré-computadas
     col_nota_cand = [c for c in df.columns if any(p in str(c).lower() for p in ["nota", "n_nota_obs", "n_nota"]) and "dt" not in str(c).lower()]
     if col_nota_cand and "NF_Clean" not in df.columns:
@@ -604,7 +661,8 @@ def sync_files_if_modified(force=False):
         "dados_bi": os.path.join(BASE_DIR, "dados_bi.xlsx"),
         "unidades": os.path.join(BASE_DIR, "unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "unidades.xls")) else os.path.join(BASE_DIR, "unidades.xlsx"),
         "listagem_unidades": os.path.join(BASE_DIR, "listagem_unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "listagem_unidades.xls")) else os.path.join(BASE_DIR, "listagem_unidades.xlsx"),
-        "nf_emergencial": os.path.join(BASE_DIR, "nf_emergencial.xlsx") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.xlsx")) else (os.path.join(BASE_DIR, "nf_emergencial.csv") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.csv")) else None)
+        "nf_emergencial": os.path.join(BASE_DIR, "nf_emergencial.xlsx") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.xlsx")) else (os.path.join(BASE_DIR, "nf_emergencial.csv") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.csv")) else None),
+        "monitoramento": os.path.join(BASE_DIR, "monitoramento.xlsx") if os.path.exists(os.path.join(BASE_DIR, "monitoramento.xlsx")) else (os.path.join(BASE_DIR, "INC", "monitoramento", "monitoramento.xlsx") if os.path.exists(os.path.join(BASE_DIR, "INC", "monitoramento", "monitoramento.xlsx")) else None)
     }
     
     last_ingestion_map = {}
@@ -636,4 +694,44 @@ def sync_files_if_modified(force=False):
                     print(f"[ERRO] Falha ao sincronizar {tabela}: {e}")
                     
     return tabelas_sincronizadas
+
+
+def get_mapa_global_unidades():
+    """
+    Retorna um dicionário consolidado { 'Pedido': 'Nome_Real_Unidade' }
+    combinando todas as fontes do DuckDB (unidades, monitoramento, listagem_unidades).
+    Garante que nenhum pedido fique associado à razão social genérica da Inconfidência.
+    """
+    mapa = {}
+    
+    # 1. Da tabela unidades (relatório do portal)
+    if table_exists("unidades"):
+        try:
+            df_u = run_query("SELECT DISTINCT Pedido_Clean, Unidade FROM unidades WHERE Unidade IS NOT NULL")
+            for _, r in df_u.iterrows():
+                p = str(r['Pedido_Clean']).strip()
+                u = str(r['Unidade']).strip()
+                if p and u and u.lower() not in ['nan', 'none', 'não informada', ''] and not re.search(r'INCONFID[EÊ]NCIA\s+LOCADORA', u, re.I):
+                    mapa[p] = u
+        except Exception:
+            pass
+
+    # 2. Da tabela monitoramento (recorte cirúrgico de 'Local de entrega')
+    if table_exists("monitoramento"):
+        try:
+            df_m = run_query("SELECT * FROM monitoramento")
+            col_loc = next((c for c in df_m.columns if 'entrega' in str(c).lower()), None)
+            if col_loc:
+                df_m['p_ext'] = df_m[col_loc].astype(str).str.extract(r'PED\.?:\s*(\d+)', expand=False)
+                df_m['u_ext'] = df_m[col_loc].apply(extrair_unidade_cirurgica)
+                for _, r in df_m.dropna(subset=['p_ext', 'u_ext']).iterrows():
+                    p = str(r['p_ext']).strip()
+                    u = str(r['u_ext']).strip()
+                    if p and u and not re.search(r'INCONFID[EÊ]NCIA\s+LOCADORA', u, re.I):
+                        mapa[p] = u
+        except Exception:
+            pass
+            
+    return mapa
+
 

@@ -28,7 +28,9 @@ from modules.db_manager import (
     ingest_sheet,
     ingest_default_files_if_needed,
     get_last_ingestion_info,
-    reset_database
+    reset_database,
+    extrair_unidade_cirurgica,
+    get_mapa_global_unidades
 )
 
 # Inicialização e auto-ingestão do DuckDB no startup
@@ -555,47 +557,9 @@ def cruzar_unidades_blindado(df_alvo, df_unidades):
 def extrair_unidade_excecao(texto):
     """
     Extrai cirurgicamente a Unidade do campo 'Local de entrega'
-    ignorando prefixos, códigos de cliente e cortando antes do endereço.
+    utilizando a engine analítica do db_manager (padrão '---- UNIDADE' ou corte de logradouros).
     """
-    if pd.isna(texto):
-        return None
-    
-    t = str(texto).strip()
-    
-    # 1. Corta tudo antes do PED.: XXXXXXX
-    match_ped = re.search(r'PED\.?:\s*\d+\s*[-–—]+', t, re.IGNORECASE)
-    if not match_ped:
-        # Se não achou 'PED.:', tenta pegar depois do início
-        miolo = t
-    else:
-        miolo = t[match_ped.end():].strip()
-    
-    # 2. Remove código numérico de cliente inicial (ex: '33466 - ', '20195 - ', '- ')
-    miolo = re.sub(r'^(?:\d+|-)\s*[-–—]+\s*', '', miolo).strip()
-    
-    # 3. Corta tudo a partir do endereço de rua/rodovia/av/estrada
-    # Trunca onde começar o logradouro
-    padroes_corte = [
-        r'\s*[-–—]+\s*RUA\b',
-        r'\s*[-–—]+\s*RODOVIA\b',
-        r'\s*[-–—]+\s*ROD\b',
-        r'\s*[-–—]+\s*AV\b',
-        r'\s*[-–—]+\s*AVENIDA\b',
-        r'\s*[-–—]+\s*ESTRADA\b',
-        r'\s*[-–—]+\s*TRAVESSA\b',
-        r'\s*[-–—]+\s*ALAMEDA\b'
-    ]
-    
-    for padrao in padroes_corte:
-        partes = re.split(padrao, miolo, flags=re.IGNORECASE)
-        if len(partes) > 1:
-            miolo = partes[0]
-            break
-            
-    # Se ainda tiver traços duplos no final, limpa
-    miolo = re.sub(r'[-–—\s]+$', '', miolo).strip()
-    
-    return miolo if miolo else None
+    return extrair_unidade_cirurgica(texto)
 
 def aplicar_regra_excecao(df_emergencial):
     """
@@ -1378,10 +1342,24 @@ if tem_duckdb or tem_arquivos:
     df_unidades = df_unidades_unique
 
     # ---------------------------------------------------------
-    # PROCESSAMENTO DE NFs EMERGENCIAIS PRÉ-CORTE
+    # PROCESSAMENTO DE NFs EMERGENCIAIS PRÉ-CORTE & MONITORAMENTO
     # ---------------------------------------------------------
     df_nf_emergencial = None
-    file_nf_emergencial_fixo = 'nf_emergencial.xlsx' if os.path.exists('nf_emergencial.xlsx') else ('nf_emergencial.csv' if os.path.exists('nf_emergencial.csv') else ('nf_emergencial.xls' if os.path.exists('nf_emergencial.xls') else None))
+    candidatos_emerg = [
+        'monitoramento.xlsx',
+        'monitoramento.xls',
+        'monitoramento.csv',
+        'nf_emergencial.xlsx',
+        'nf_emergencial.csv',
+        'nf_emergencial.xls',
+        os.path.join('INC', 'monitoramento', 'monitoramento.xlsx')
+    ]
+    file_nf_emergencial_fixo = None
+    for cand in candidatos_emerg:
+        if os.path.exists(cand):
+            file_nf_emergencial_fixo = cand
+            break
+
     arquivo_nf_emerg_alvo = uploaded_nf_emergencial if uploaded_nf_emergencial is not None else file_nf_emergencial_fixo
 
     nfs_extras = set()
@@ -1667,13 +1645,27 @@ if tem_duckdb or tem_arquivos:
                 df_novas_linhas['Nota'] = df_novas_linhas['Pedido']
             df_novas_linhas['NF_Clean'] = df_novas_linhas['Nota'].str.replace(r'\D', '', regex=True).str.lstrip('0')
             
-            # Unidade
-            cols_uni = [c for c in df_nf_emergencial.columns if any(p in str(c).lower() for p in ['unidade', 'cliente', 'razao social', 'nome'])]
-            if cols_uni:
-                df_novas_linhas['UNIDADE'] = df_nf_emergencial[cols_uni[0]].astype(str).str.strip()
+            # Unidade (recorte cirúrgico e busca no DuckDB com prioridade absoluta)
+            col_loc_cand = next((c for c in df_nf_emergencial.columns if 'entrega' in str(c).lower() or 'local' in str(c).lower()), None)
+            col_unid_cand = next((c for c in df_nf_emergencial.columns if str(c).strip().lower() in ['unidade', 'unidade_excecao', 'unidade_extraida', 'unidade_final']), None)
+
+            if col_loc_cand:
+                df_novas_linhas['UNIDADE'] = df_nf_emergencial[col_loc_cand].apply(extrair_unidade_excecao)
+            elif col_unid_cand:
+                df_novas_linhas['UNIDADE'] = df_nf_emergencial[col_unid_cand].astype(str).str.strip()
             else:
-                df_novas_linhas['UNIDADE'] = "Ajuste Emergencial"
-            
+                df_novas_linhas['UNIDADE'] = ""
+
+            # Se ainda estiver genérica, nula ou vazia, recorre ao mapa global do DuckDB
+            mask_unid_gen = (
+                df_novas_linhas['UNIDADE'].isna() |
+                df_novas_linhas['UNIDADE'].astype(str).str.strip().isin(['', 'nan', 'None', 'Não Informada']) |
+                df_novas_linhas['UNIDADE'].astype(str).str.contains(r'INCONFID[EÊ]NCIA\s+LOCADORA', case=False, na=False)
+            )
+            mapa_global = get_mapa_global_unidades()
+            unid_map = df_novas_linhas['Pedido_Clean'].map(mapa_global)
+            df_novas_linhas.loc[mask_unid_gen & unid_map.notna() & (unid_map != ''), 'UNIDADE'] = unid_map
+
             df_novas_linhas['Unidade_Final'] = df_novas_linhas['UNIDADE']
             df_novas_linhas['Unidade'] = df_novas_linhas['UNIDADE']
             df_novas_linhas['Unidade_Real'] = df_novas_linhas['UNIDADE']
@@ -1719,6 +1711,41 @@ if tem_duckdb or tem_arquivos:
                 df_merged = df_merged.drop_duplicates(subset=['Pedido'], keep='last')
         except Exception as err_concat:
             st.sidebar.warning(f"Aviso ao conciliar novas linhas da planilha emergencial: {err_concat}")
+
+    # ---------------------------------------------------------
+    # BLINDAGEM ANALÍTICA TOTAL: NENHUM PEDIDO PODE FICAR COMO
+    # "INCONFIDENCIA LOCADORA..."
+    # ---------------------------------------------------------
+    mapa_global = get_mapa_global_unidades()
+    
+    # Identifica pedidos com unidade genérica, nula ou vazia
+    mask_precisa_unidade = (
+        df_merged['Unidade_Final'].isna() |
+        df_merged['Unidade_Final'].astype(str).str.strip().isin(['', 'nan', 'None', 'Não Informada', '-']) |
+        df_merged['Unidade_Final'].astype(str).str.contains(r'INCONFID[EÊ]NCIA\s+LOCADORA', case=False, na=False)
+    )
+
+    if mask_precisa_unidade.any():
+        # 1. Busca no mapa global consolidado (DuckDB unidades + monitoramento)
+        unid_resolvida = df_merged['Pedido_Clean'].map(mapa_global)
+        df_merged.loc[mask_precisa_unidade & unid_resolvida.notna() & (unid_resolvida != ''), 'Unidade_Final'] = unid_resolvida
+
+        # 2. Se a linha possui a coluna 'Local de entrega', extrai cirurgicamente
+        col_local_merged = next((c for c in df_merged.columns if 'entrega' in str(c).lower() or 'local' in str(c).lower()), None)
+        if col_local_merged:
+            unid_rec = df_merged[col_local_merged].apply(extrair_unidade_excecao)
+            df_merged.loc[mask_precisa_unidade & unid_rec.notna() & (unid_rec != ''), 'Unidade_Final'] = unid_rec
+
+        # 3. Fallback para cidade do Acompanhamento se não for Não Informada
+        mask_ainda_gen = df_merged['Unidade_Final'].astype(str).str.contains(r'INCONFID[EÊ]NCIA\s+LOCADORA', case=False, na=False)
+        if 'cidade' in df_merged.columns:
+            df_merged.loc[mask_ainda_gen & df_merged['cidade'].notna() & (df_merged['cidade'] != 'Não Informada'), 'Unidade_Final'] = df_merged['cidade']
+
+    # Sincroniza todas as colunas de visualização e filtros
+    df_merged['UNIDADE'] = df_merged['Unidade_Final']
+    df_merged['Unidade'] = df_merged['Unidade_Final']
+    df_merged['Unidade_Real'] = df_merged['Unidade_Final']
+    df_merged['Unidade_Clean'] = df_merged['Unidade_Final'].apply(limpar_texto_corrompido)
 else:
     st.warning("⚠️ Os arquivos de banco de dados não foram encontrados no servidor. Por favor, contate o administrador.")
     st.stop()

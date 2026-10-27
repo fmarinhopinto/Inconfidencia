@@ -22,6 +22,9 @@ temp/
 !listagem_unidades.xlsx
 !listagem_unidades.xls
 !listagem_unidades.csv
+!monitoramento.xlsx
+!monitoramento.xls
+!monitoramento.csv
 
 # Banco Analítico DuckDB
 !data/
