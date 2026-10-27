@@ -15,6 +15,12 @@ if not exist "%GIT_EXE%" (
     set "GIT_EXE=git"
 )
 
+set "PY_EXE=C:\Users\filipe.marinho\AppData\Local\Programs\Python\Python312\python.exe"
+if exist "%PY_EXE%" (
+    echo [*] Verificando se ha novas planilhas para o DuckDB...
+    "%PY_EXE%" -c "from modules.db_manager import sync_files_if_modified; sync_files_if_modified()"
+)
+
 echo [*] Preparando arquivos e banco de dados...
 "%GIT_EXE%" add .
 

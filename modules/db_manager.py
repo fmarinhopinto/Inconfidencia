@@ -547,3 +547,50 @@ def ingest_default_files_if_needed():
                     print(f"Aviso ao ingerir {tabela}: {e}")
 
     return tabelas_ingestao
+
+
+def sync_files_if_modified(force=False):
+    """
+    Sincroniza os arquivos de planilha da pasta raiz com as tabelas do DuckDB.
+    Se o arquivo físico existir e tiver data de modificação mais recente que
+    a última ingestão registrada para a tabela (ou se force=True), executa a ingestão.
+    """
+    init_db()
+    mapeamento_arquivos = {
+        "acompanhamento": os.path.join(BASE_DIR, "acompanhamento.xlsx"),
+        "dados_bi": os.path.join(BASE_DIR, "dados_bi.xlsx"),
+        "unidades": os.path.join(BASE_DIR, "unidades.xlsx"),
+        "listagem_unidades": os.path.join(BASE_DIR, "listagem_unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "listagem_unidades.xls")) else os.path.join(BASE_DIR, "listagem_unidades.xlsx"),
+        "nf_emergencial": os.path.join(BASE_DIR, "nf_emergencial.xlsx") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.xlsx")) else (os.path.join(BASE_DIR, "nf_emergencial.csv") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.csv")) else None)
+    }
+    
+    last_ingestion_map = {}
+    if table_exists("ingestion_metadata"):
+        try:
+            df_epoch = run_query("SELECT table_name, max(epoch(ingested_at)) as last_epoch FROM ingestion_metadata GROUP BY table_name")
+            if not df_epoch.empty:
+                for _, row in df_epoch.iterrows():
+                    last_ingestion_map[str(row["table_name"])] = float(row["last_epoch"]) if pd.notna(row["last_epoch"]) else 0.0
+        except Exception:
+            pass
+
+    tabelas_sincronizadas = []
+    for tabela, caminho in mapeamento_arquivos.items():
+        if caminho and os.path.exists(caminho):
+            mtime = os.path.getmtime(caminho)
+            last_ingested = last_ingestion_map.get(tabela, 0.0)
+            
+            # Se for forçado, se a tabela não existir, estiver vazia, ou se o arquivo for mais novo que a última ingestão
+            deve_ingerir = force or (not table_exists(tabela)) or (get_table_row_count(tabela) == 0) or (mtime > last_ingested + 2.0)
+            
+            if deve_ingerir:
+                try:
+                    print(f"[*] Ingerindo {os.path.basename(caminho)} na tabela '{tabela}'...")
+                    ingest_sheet(caminho, table_name=tabela, mode="replace", original_filename=os.path.basename(caminho))
+                    tabelas_sincronizadas.append(tabela)
+                    print(f"[OK] Tabela '{tabela}' atualizada com sucesso.")
+                except Exception as e:
+                    print(f"[ERRO] Falha ao sincronizar {tabela}: {e}")
+                    
+    return tabelas_sincronizadas
+
