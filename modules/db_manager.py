@@ -732,6 +732,19 @@ def get_mapa_global_unidades():
         except Exception:
             pass
             
+    # 3. Exceções Manuais Prioritárias
+    mapa.update(EXCECOES_MANUAIS_UNIDADES)
     return mapa
+
+
+# -------------------------------------------------------------------------
+# TABELA DE EXCEÇÕES MANUAIS DE UNIDADES ESPECÍFICAS
+# -------------------------------------------------------------------------
+EXCECOES_MANUAIS_UNIDADES = {
+    "1232704": "SERPRO - REFATURAMENTO VALOR DE CAFÉ ESTAVA ERRADO",
+    "1234043": "BANRISUL AV DO FORTE - EMITIDO INTERNO POR ERRO DE SISTEMA",
+    "1234574": "GRUPO CABURGO - CITROEN E JAECOO CANOAS"
+}
+
 
 

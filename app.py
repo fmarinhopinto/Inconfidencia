@@ -30,7 +30,8 @@ from modules.db_manager import (
     get_last_ingestion_info,
     reset_database,
     extrair_unidade_cirurgica,
-    get_mapa_global_unidades
+    get_mapa_global_unidades,
+    EXCECOES_MANUAIS_UNIDADES
 )
 
 # Inicialização e auto-ingestão do DuckDB no startup
@@ -1740,6 +1741,14 @@ if tem_duckdb or tem_arquivos:
         mask_ainda_gen = df_merged['Unidade_Final'].astype(str).str.contains(r'INCONFID[EÊ]NCIA\s+LOCADORA', case=False, na=False)
         if 'cidade' in df_merged.columns:
             df_merged.loc[mask_ainda_gen & df_merged['cidade'].notna() & (df_merged['cidade'] != 'Não Informada'), 'Unidade_Final'] = df_merged['cidade']
+
+    # ---------------------------------------------------------
+    # EXCEÇÕES MANUAIS PRIORITÁRIAS DE UNIDADES ESPECÍFICAS
+    # ---------------------------------------------------------
+    for ped_exc, unid_exc in EXCECOES_MANUAIS_UNIDADES.items():
+        mask_exc = (df_merged['Pedido_Clean'] == ped_exc) | (df_merged['Pedido'].astype(str).str.strip() == ped_exc)
+        if mask_exc.any():
+            df_merged.loc[mask_exc, 'Unidade_Final'] = unid_exc
 
     # Sincroniza todas as colunas de visualização e filtros
     df_merged['UNIDADE'] = df_merged['Unidade_Final']
