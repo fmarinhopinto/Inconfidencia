@@ -1634,8 +1634,9 @@ if tem_duckdb or tem_arquivos:
     df_merged.drop(columns=['NF_limpa', 'NF_limpa_dig'], inplace=True, errors='ignore')
 
     # 4. Liberação da data de corte para registros do período ou faturados no conjunto combinado
-    serie_dt_corte = pd.to_datetime(df_merged['Dt_inser'], dayfirst=True, errors='coerce').dt.date
-    cond_corte = (serie_dt_corte >= DATA_CORTE) | mask_faturados_combinado
+    serie_dt_corte = pd.to_datetime(df_merged['Dt_inser'], dayfirst=True, errors='coerce').dt.normalize()
+    ts_corte = pd.Timestamp(DATA_CORTE).normalize()
+    cond_corte = (serie_dt_corte >= ts_corte) | mask_faturados_combinado
 
     if pedidos_extras:
         mask_ped = df_merged['Pedido_Clean'].isin(pedidos_extras) | df_merged['Pedido'].astype(str).str.strip().isin(pedidos_extras)
@@ -1761,16 +1762,18 @@ df_filtrado = df_merged.copy()
 
 # Filtro de Período (com garantia da data de corte >= 21/10/2026, exceto NFs/Pedidos emergenciais)
 data_ini_efetiva = max(data_inicio, DATA_CORTE) if data_inicio else DATA_CORTE
-serie_dt = pd.to_datetime(df_filtrado['Dt_inser'], dayfirst=True, errors='coerce').dt.date
+ts_ini_efetiva = pd.Timestamp(data_ini_efetiva).normalize()
+serie_dt = pd.to_datetime(df_filtrado['Dt_inser'], dayfirst=True, errors='coerce').dt.normalize()
 
-cond_inicio = serie_dt >= data_ini_efetiva
+cond_inicio = serie_dt >= ts_ini_efetiva
 if nfs_emergenciais:
     cond_inicio = cond_inicio | df_filtrado['NF_Clean'].isin(nfs_emergenciais)
 if pedidos_emergenciais:
     cond_inicio = cond_inicio | df_filtrado['Pedido_Clean'].isin(pedidos_emergenciais)
 
 if data_fim:
-    cond_fim = serie_dt <= data_fim
+    ts_fim = pd.Timestamp(data_fim).normalize()
+    cond_fim = serie_dt <= ts_fim
     if nfs_emergenciais:
         cond_fim = cond_fim | df_filtrado['NF_Clean'].isin(nfs_emergenciais)
     if pedidos_emergenciais:
@@ -1866,16 +1869,18 @@ with tab1:
         col_valor: 'Valor (R$)'
     }, inplace=True)
 
-    df_tabela['Data_Formatada'] = pd.to_datetime(df_tabela['Data de Inserção'], errors='coerce', dayfirst=True)
+    df_tabela['Data_Formatada'] = pd.to_datetime(df_tabela['Data de Inserção'], errors='coerce', dayfirst=True).dt.normalize()
 
     data_ini_efetiva = max(data_inicio, DATA_CORTE) if data_inicio else DATA_CORTE
-    cond_tab = df_tabela['Data_Formatada'].dt.date >= data_ini_efetiva
+    ts_tab_ini = pd.Timestamp(data_ini_efetiva).normalize()
+    cond_tab = df_tabela['Data_Formatada'] >= ts_tab_ini
     if nfs_emergenciais or pedidos_emergenciais:
         peds_liberados = df_merged['Pedido'].unique()
         cond_tab = cond_tab | df_tabela['Pedido'].isin(peds_liberados)
 
     if data_fim:
-        cond_tab_fim = df_tabela['Data_Formatada'].dt.date <= data_fim
+        ts_tab_fim = pd.Timestamp(data_fim).normalize()
+        cond_tab_fim = df_tabela['Data_Formatada'] <= ts_tab_fim
         if nfs_emergenciais or pedidos_emergenciais:
             cond_tab_fim = cond_tab_fim | df_tabela['Pedido'].isin(peds_liberados)
         df_tabela = df_tabela[cond_tab & cond_tab_fim]
@@ -2079,8 +2084,7 @@ with tab3:
             df_pedidos['Valor'] = pd.to_numeric(df_pedidos[col_vlr_ped], errors='coerce').fillna(0.0)
 
             # Conversão robusta de data para datetime
-            dt_parsed = pd.to_datetime(df_pedidos[col_data_ped], errors='coerce', dayfirst=True)
-            df_pedidos['Data_Obj'] = dt_parsed.dt.date
+            dt_parsed = pd.to_datetime(df_pedidos[col_data_ped], errors='coerce', dayfirst=True).dt.normalize()
 
             # Janela fixa trimestral dinâmica (últimos 3 meses até a data presente)
             hoje = datetime.date.today()
@@ -2091,9 +2095,11 @@ with tab3:
                 ano_inicio -= 1
             data_inicio_trimestre = datetime.date(ano_inicio, mes_inicio, 1)
             data_fim_trimestre = hoje
+            ts_ini_tri = pd.Timestamp(data_inicio_trimestre).normalize()
+            ts_fim_tri = pd.Timestamp(data_fim_trimestre).normalize()
 
             # Aplicação do período fixo trimestral (ignora filtro de data da barra lateral)
-            df_pedidos = df_pedidos[(df_pedidos['Data_Obj'] >= data_inicio_trimestre) & (df_pedidos['Data_Obj'] <= data_fim_trimestre)]
+            df_pedidos = df_pedidos[(dt_parsed >= ts_ini_tri) & (dt_parsed <= ts_fim_tri)]
 
             # Mapeamento do mês em português
             dt_filtrado = pd.to_datetime(df_pedidos[col_data_ped], errors='coerce', dayfirst=True)
