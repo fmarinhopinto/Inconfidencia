@@ -551,15 +551,58 @@ def ingest_default_files_if_needed():
 
 def sync_files_if_modified(force=False):
     """
-    Sincroniza os arquivos de planilha da pasta raiz com as tabelas do DuckDB.
+    Sincroniza os arquivos de planilha da pasta raiz ou da pasta INC com as tabelas do DuckDB.
     Se o arquivo físico existir e tiver data de modificação mais recente que
     a última ingestão registrada para a tabela (ou se force=True), executa a ingestão.
     """
     init_db()
+    
+    # 1. Verifica se há arquivos mais novos na subpasta INC e traz para a raiz
+    inc_dir = os.path.join(BASE_DIR, "INC")
+    if os.path.exists(inc_dir):
+        # Acompanhamento em INC
+        inc_acomp = os.path.join(inc_dir, "acompanhamento.xlsx")
+        raiz_acomp = os.path.join(BASE_DIR, "acompanhamento.xlsx")
+        if os.path.exists(inc_acomp):
+            if not os.path.exists(raiz_acomp) or (os.path.getmtime(inc_acomp) > os.path.getmtime(raiz_acomp) + 1.0):
+                try:
+                    import shutil
+                    shutil.copy2(inc_acomp, raiz_acomp)
+                    print("[*] Base 'acompanhamento.xlsx' atualizada a partir da pasta INC.")
+                except Exception:
+                    pass
+
+        # Unidades em INC
+        for ext in [".xls", ".xlsx"]:
+            inc_u = os.path.join(inc_dir, f"unidades{ext}")
+            raiz_u = os.path.join(BASE_DIR, f"unidades{ext}")
+            if os.path.exists(inc_u):
+                if not os.path.exists(raiz_u) or (os.path.getmtime(inc_u) > os.path.getmtime(raiz_u) + 1.0):
+                    try:
+                        import shutil
+                        shutil.copy2(inc_u, raiz_u)
+                        print(f"[*] Base 'unidades{ext}' atualizada a partir da pasta INC.")
+                    except Exception:
+                        pass
+
+        # Dados BI em INC (se houver novo, faz merge inteligente com histórico)
+        inc_bi = os.path.join(inc_dir, "dados_bi.xlsx")
+        raiz_bi = os.path.join(BASE_DIR, "dados_bi.xlsx")
+        if os.path.exists(inc_bi) and os.path.exists(raiz_bi):
+            if os.path.getmtime(inc_bi) > os.path.getmtime(raiz_bi) + 1.0:
+                try:
+                    df_old = pd.read_excel(raiz_bi)
+                    df_new = pd.read_excel(inc_bi)
+                    df_total = pd.concat([df_old, df_new], ignore_index=True).drop_duplicates()
+                    df_total.to_excel(raiz_bi, index=False)
+                    print("[*] Base 'dados_bi.xlsx' unificada com os novos dados de INC.")
+                except Exception as e:
+                    print(f"Aviso no merge de dados_bi de INC: {e}")
+
     mapeamento_arquivos = {
         "acompanhamento": os.path.join(BASE_DIR, "acompanhamento.xlsx"),
         "dados_bi": os.path.join(BASE_DIR, "dados_bi.xlsx"),
-        "unidades": os.path.join(BASE_DIR, "unidades.xlsx"),
+        "unidades": os.path.join(BASE_DIR, "unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "unidades.xls")) else os.path.join(BASE_DIR, "unidades.xlsx"),
         "listagem_unidades": os.path.join(BASE_DIR, "listagem_unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "listagem_unidades.xls")) else os.path.join(BASE_DIR, "listagem_unidades.xlsx"),
         "nf_emergencial": os.path.join(BASE_DIR, "nf_emergencial.xlsx") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.xlsx")) else (os.path.join(BASE_DIR, "nf_emergencial.csv") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.csv")) else None)
     }
