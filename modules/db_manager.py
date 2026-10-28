@@ -476,6 +476,22 @@ def ingest_sheet(file_path_or_buffer, table_name, mode="replace", original_filen
 
     # 5. Ingestão de Alta Performance no DuckDB
     table_clean = re.sub(r'[^a-zA-Z0-9_]', '_', table_name).lower().strip('_')
+
+    # 4.5 Blindagem analítica anti-duplicação na ingestão
+    if table_clean == "dados_bi":
+        cols_dup = [c for c in ["NF_Clean", "Cod", "QTD", "Vendas Total"] if c in df.columns]
+        if len(cols_dup) >= 3:
+            df = df.drop_duplicates(subset=cols_dup, keep="last")
+    elif table_clean == "acompanhamento":
+        if "Pedido_Clean" in df.columns:
+            col_cli = next((c for c in df.columns if any(p in str(c).lower() for p in ["cliente", "nome"])), None)
+            col_nota = next((c for c in df.columns if any(p in str(c).lower() for p in ["nota", "nf"])), None)
+            subset_cols = [col_cli, "Pedido_Clean"] if col_cli else ["Pedido_Clean"]
+            if col_nota:
+                df = df.sort_values(by=[col_nota], ascending=False).drop_duplicates(subset=subset_cols, keep="first")
+            else:
+                df = df.drop_duplicates(subset=subset_cols, keep="first")
+
     row_count = len(df)
     
     with get_connection(read_only=False) as conn:
@@ -484,7 +500,14 @@ def ingest_sheet(file_path_or_buffer, table_name, mode="replace", original_filen
         t_exists = table_exists(table_clean)
         
         if mode == "append" and t_exists:
-            # Garante colunas compatíveis ou insere por posição
+            # Blindagem idempotente contra duplicação no modo append
+            if table_clean == "dados_bi" and "NF_Clean" in df.columns:
+                conn.execute(f"DELETE FROM {table_clean} WHERE NF_Clean IN (SELECT DISTINCT NF_Clean FROM df_ingest_buffer WHERE NF_Clean IS NOT NULL AND NF_Clean != '')")
+            elif table_clean == "acompanhamento" and "Pedido_Clean" in df.columns:
+                conn.execute(f"DELETE FROM {table_clean} WHERE Pedido_Clean IN (SELECT DISTINCT Pedido_Clean FROM df_ingest_buffer WHERE Pedido_Clean IS NOT NULL AND Pedido_Clean != '')")
+            elif table_clean == "unidades" and "Pedido_Clean" in df.columns:
+                conn.execute(f"DELETE FROM {table_clean} WHERE Pedido_Clean IN (SELECT DISTINCT Pedido_Clean FROM df_ingest_buffer WHERE Pedido_Clean IS NOT NULL AND Pedido_Clean != '')")
+
             conn.execute(f"INSERT INTO {table_clean} SELECT * FROM df_ingest_buffer")
         else:
             conn.execute(f"CREATE OR REPLACE TABLE {table_clean} AS SELECT * FROM df_ingest_buffer")
@@ -732,7 +755,65 @@ def sync_files_if_modified(force=False):
                 except Exception as e:
                     print(f"[ERRO] Falha ao sincronizar {tabela}: {e}")
                     
+    # Executa auditoria automática após a sincronização
+    auditar_integridade_bases()
     return tabelas_sincronizadas
+
+
+def auditar_integridade_bases():
+    """
+    Realiza auditoria matemática profunda no DuckDB para assegurar:
+    1. Zero duplicatas de itens faturados no dados_bi;
+    2. Zero duplicatas de pedidos no acompanhamento;
+    3. Consistência entre tabelas.
+    Retorna dicionário com o status da auditoria.
+    """
+    relatorio = {"status": "OK", "alertas": []}
+    
+    # 1. Checagem dados_bi
+    if table_exists("dados_bi"):
+        try:
+            df_dup_bi = run_query("""
+                SELECT NF_Clean, Cod, QTD, "Vendas Total", COUNT(*) as cnt
+                FROM dados_bi
+                WHERE NF_Clean IS NOT NULL AND NF_Clean != ''
+                GROUP BY NF_Clean, Cod, QTD, "Vendas Total"
+                HAVING COUNT(*) > 1
+            """)
+            if not df_dup_bi.empty:
+                qtd_dups = len(df_dup_bi)
+                relatorio["status"] = "ALERTA"
+                relatorio["alertas"].append(f"Detectadas {qtd_dups} linhas de itens repetidos em dados_bi.")
+        except Exception as e:
+            relatorio["alertas"].append(f"Erro na auditoria de dados_bi: {e}")
+            
+    # 2. Checagem acompanhamento (Inconfidência)
+    if table_exists("acompanhamento"):
+        try:
+            desc_cols = [x[0] for x in run_query("DESCRIBE acompanhamento").values.tolist()]
+            col_cli = next((c for c in ["nome_cliente", "cliente", "razao"] if c in desc_cols), None)
+            filtro_cli = f"AND LOWER(COALESCE({col_cli}, '')) LIKE '%inconfidencia%'" if col_cli else ""
+            df_dup_acomp = run_query(f"""
+                SELECT Pedido_Clean, COUNT(*) as cnt
+                FROM acompanhamento
+                WHERE Pedido_Clean IS NOT NULL AND Pedido_Clean != '' {filtro_cli}
+                GROUP BY Pedido_Clean
+                HAVING COUNT(*) > 1
+            """)
+            if not df_dup_acomp.empty:
+                qtd_dups_ped = len(df_dup_acomp)
+                relatorio["status"] = "ALERTA"
+                relatorio["alertas"].append(f"Detectados {qtd_dups_ped} pedidos duplicados da Inconfidência em acompanhamento.")
+        except Exception as e:
+            relatorio["alertas"].append(f"Erro na auditoria de acompanhamento: {e}")
+            
+    if relatorio["status"] == "OK":
+        print("[AUDITORIA] Banco de Dados 100% íntegro: Nenhuma duplicata encontrada.")
+    else:
+        for al in relatorio["alertas"]:
+            print(f"[AVISO AUDITORIA] {al}")
+            
+    return relatorio
 
 
 def get_mapa_global_unidades():

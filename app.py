@@ -1101,6 +1101,14 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v8_du
         df_acomp["Pedido"] = [f"PED-{i+1}" for i in range(len(df_acomp))]
 
     df_acomp["Pedido"] = df_acomp["Pedido"].astype(str).str.strip()
+    df_acomp["Pedido_Clean"] = df_acomp["Pedido"].apply(limpar_id)
+
+    # Blindagem determinística: deduplica pedidos preservando a linha com Nota emitida se houver duplicatas de sistema
+    col_nota_temp = find_column(df_acomp, ["Nota", "nota", "n_nota", "numero_nota"])
+    if col_nota_temp:
+        df_acomp = df_acomp.sort_values(by=[col_nota_temp], ascending=False).drop_duplicates(subset=["Pedido_Clean"], keep="first")
+    else:
+        df_acomp = df_acomp.drop_duplicates(subset=["Pedido_Clean"], keep="first")
 
     # Garantir existência e limpeza da coluna 'cidade' para Fallback
     col_cidade = find_column(df_acomp, ["cidade", "municipio", "cid"])
@@ -1204,6 +1212,11 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v8_du
     # Chave 1: Nota Fiscal (BI <-> Acomp)
     df_bi['NF_Clean'] = df_bi['n_nota_obs'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
     df_acomp['NF_Clean'] = df_acomp['Nota'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+
+    # Blindagem analítica anti-duplicação de itens no BI
+    cols_dup_bi = [c for c in ['NF_Clean', 'Cod', 'QTD', 'Vendas Total'] if c in df_bi.columns]
+    if len(cols_dup_bi) >= 3:
+        df_bi = df_bi.drop_duplicates(subset=cols_dup_bi, keep="last")
 
     # Resumo agrupado do BI por NF_Clean
     resumo_bi = df_bi[df_bi['NF_Clean'] != ''].groupby("NF_Clean", as_index=False).agg({
@@ -1711,7 +1724,9 @@ if tem_duckdb or tem_arquivos:
             df_merged = pd.concat([df_merged, df_novas_linhas], ignore_index=True)
 
             # Remove duplicatas mantendo a versão com dados completos
-            if 'Pedido' in df_merged.columns:
+            if 'Pedido_Clean' in df_merged.columns:
+                df_merged = df_merged.drop_duplicates(subset=['Pedido_Clean'], keep='last')
+            elif 'Pedido' in df_merged.columns:
                 df_merged = df_merged.drop_duplicates(subset=['Pedido'], keep='last')
         except Exception as err_concat:
             st.sidebar.warning(f"Aviso ao conciliar novas linhas da planilha emergencial: {err_concat}")
