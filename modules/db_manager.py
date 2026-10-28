@@ -237,41 +237,71 @@ def load_sheet(file_obj):
 # CONEXÃO E INICIALIZAÇÃO DO BANCO DUCKDB
 # -------------------------------------------------------------------------
 
-def get_connection(read_only=False):
+def get_connection(read_only=True):
     """
     Retorna uma conexão com o banco DuckDB persistido em data/dashboard_data.duckdb.
     Para consultas no Streamlit, use preferencialmente read_only=True para alta concorrência.
     """
     os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(DB_PATH):
+        try:
+            c = duckdb.connect(DB_PATH, read_only=False)
+            c.close()
+        except Exception:
+            pass
+
+    if read_only:
+        try:
+            return duckdb.connect(DB_PATH, read_only=True)
+        except Exception:
+            try:
+                return duckdb.connect(DB_PATH, read_only=False)
+            except Exception as e_ro:
+                raise e_ro
+            
     try:
-        return duckdb.connect(DB_PATH, read_only=read_only)
-    except duckdb.IOException as e:
-        # Se houver lock por outro processo escrevendo e read_only=False foi pedido, tenta read_only=True
-        if not read_only:
-            raise e
-        return duckdb.connect(DB_PATH, read_only=True)
+        return duckdb.connect(DB_PATH, read_only=False)
+    except Exception as e:
+        if os.path.exists(DB_PATH):
+            try:
+                return duckdb.connect(DB_PATH, read_only=True)
+            except Exception:
+                pass
+        raise e
 
 
 def init_db():
     """
     Cria as tabelas base do sistema e a tabela de controle de metadados de ingestão.
+    Se o arquivo de banco já existir e contiver dados, não tenta travar o arquivo com escrita.
     """
     os.makedirs(DATA_DIR, exist_ok=True)
-    with get_connection(read_only=False) as conn:
-        conn.execute("""
-            CREATE SEQUENCE IF NOT EXISTS seq_ingestion_id START 1;
-            
-            CREATE TABLE IF NOT EXISTS ingestion_metadata (
-                id INTEGER PRIMARY KEY DEFAULT nextval('seq_ingestion_id'),
-                table_name VARCHAR NOT NULL,
-                file_name VARCHAR,
-                row_count INTEGER,
-                mode VARCHAR,
-                ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                status VARCHAR,
-                details VARCHAR
-            );
-        """)
+    if os.path.exists(DB_PATH):
+        try:
+            if table_exists("ingestion_metadata"):
+                return True
+        except Exception:
+            pass
+
+    try:
+        with get_connection(read_only=False) as conn:
+            conn.execute("""
+                CREATE SEQUENCE IF NOT EXISTS seq_ingestion_id START 1;
+                
+                CREATE TABLE IF NOT EXISTS ingestion_metadata (
+                    id INTEGER PRIMARY KEY DEFAULT nextval('seq_ingestion_id'),
+                    table_name VARCHAR NOT NULL,
+                    file_name VARCHAR,
+                    row_count INTEGER,
+                    mode VARCHAR,
+                    ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status VARCHAR,
+                    details VARCHAR
+                );
+            """)
+        return True
+    except Exception:
+        return False
 
 
 def table_exists(table_name):

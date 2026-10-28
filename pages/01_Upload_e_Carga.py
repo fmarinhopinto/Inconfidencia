@@ -56,8 +56,11 @@ if not st.session_state.get("autenticado") or st.session_state.get("perfil") != 
 st.sidebar.page_link("app.py", label="📊 Voltar ao Dashboard Comercial", icon="📊")
 st.sidebar.markdown("---")
 
-# Inicializa o banco de dados
-init_db()
+# Inicializa o banco de dados se necessário
+try:
+    init_db()
+except Exception:
+    pass
 
 # Cabeçalho Principal
 st.markdown("""

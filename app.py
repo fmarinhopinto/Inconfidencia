@@ -34,9 +34,12 @@ from modules.db_manager import (
     EXCECOES_MANUAIS_UNIDADES
 )
 
-# Inicialização e auto-ingestão do DuckDB no startup
-init_db()
-ingest_default_files_if_needed()
+# Inicialização e auto-ingestão do DuckDB no startup (com proteção contra locks)
+try:
+    init_db()
+    ingest_default_files_if_needed()
+except Exception:
+    pass
 
 # ---------------------------------------------------------
 # 1. CONFIGURAÇÃO DA PÁGINA
