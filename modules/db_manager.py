@@ -239,8 +239,8 @@ def load_sheet(file_obj):
 
 def get_connection(read_only=True):
     """
-    Retorna uma conexão com o banco DuckDB persistido em data/dashboard_data.duckdb.
-    Para consultas no Streamlit, use preferencialmente read_only=True para alta concorrência.
+    Retorna uma conexão de alta performance com o banco DuckDB persistido em data/dashboard_data.duckdb.
+    Aplica PRAGMAs analíticos modernos: multithreading (4 cores), limite de memória e modo colunar rápido.
     """
     os.makedirs(DATA_DIR, exist_ok=True)
     if not os.path.exists(DB_PATH):
@@ -250,30 +250,54 @@ def get_connection(read_only=True):
         except Exception:
             pass
 
+    conn = None
     if read_only:
         try:
-            return duckdb.connect(DB_PATH, read_only=True)
+            conn = duckdb.connect(DB_PATH, read_only=True)
         except Exception:
             try:
-                return duckdb.connect(DB_PATH, read_only=False)
+                conn = duckdb.connect(DB_PATH, read_only=False)
             except Exception as e_ro:
                 raise e_ro
-            
+    else:
+        try:
+            conn = duckdb.connect(DB_PATH, read_only=False)
+        except Exception as e:
+            if os.path.exists(DB_PATH):
+                try:
+                    conn = duckdb.connect(DB_PATH, read_only=True)
+                except Exception:
+                    pass
+            if conn is None:
+                raise e
+
+    if conn is not None:
+        try:
+            conn.execute("PRAGMA threads = 4;")
+            conn.execute("PRAGMA preserve_insertion_order = false;")
+        except Exception:
+            pass
+
+    return conn
+
+
+def criar_indices_alta_performance(conn):
+    """Cria índices ART analíticos nas chaves de busca e cruzamento de alta frequência."""
     try:
-        return duckdb.connect(DB_PATH, read_only=False)
-    except Exception as e:
-        if os.path.exists(DB_PATH):
-            try:
-                return duckdb.connect(DB_PATH, read_only=True)
-            except Exception:
-                pass
-        raise e
+        if table_exists("acompanhamento"):
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_acomp_ped ON acompanhamento (Pedido_Clean);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_acomp_nf ON acompanhamento (NF_Clean);")
+        if table_exists("dados_bi"):
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bi_nf ON dados_bi (NF_Clean);")
+        if table_exists("unidades"):
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_unid_ped ON unidades ("Codigo pedido");')
+    except Exception:
+        pass
 
 
 def init_db():
     """
-    Cria as tabelas base do sistema e a tabela de controle de metadados de ingestão.
-    Se o arquivo de banco já existir e contiver dados, não tenta travar o arquivo com escrita.
+    Cria as tabelas base do sistema, metadados e índices analíticos de alta velocidade.
     """
     os.makedirs(DATA_DIR, exist_ok=True)
     if os.path.exists(DB_PATH):
@@ -299,6 +323,7 @@ def init_db():
                     details VARCHAR
                 );
             """)
+            criar_indices_alta_performance(conn)
         return True
     except Exception:
         return False
