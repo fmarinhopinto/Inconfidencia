@@ -672,17 +672,26 @@ def sync_files_if_modified(force=False):
                     except Exception:
                         pass
 
-        # Dados BI em INC (se houver novo, faz merge inteligente com histórico)
+        # Dados BI em INC (se houver novo, faz merge inteligente por Nota Fiscal com histórico)
         inc_bi = os.path.join(inc_dir, "dados_bi.xlsx")
         raiz_bi = os.path.join(BASE_DIR, "dados_bi.xlsx")
         if os.path.exists(inc_bi) and os.path.exists(raiz_bi):
             if os.path.getmtime(inc_bi) > os.path.getmtime(raiz_bi) + 1.0:
                 try:
-                    df_old = pd.read_excel(raiz_bi)
                     df_new = pd.read_excel(inc_bi)
-                    df_total = pd.concat([df_old, df_new], ignore_index=True).drop_duplicates()
-                    df_total.to_excel(raiz_bi, index=False)
-                    print("[*] Base 'dados_bi.xlsx' unificada com os novos dados de INC.")
+                    if not df_new.empty:
+                        col_nota_new = next((c for c in df_new.columns if any(p in str(c).lower() for p in ['n_nota_obs', 'nota', 'nf', 'numero_nota'])), None)
+                        if col_nota_new:
+                            df_old = pd.read_excel(raiz_bi)
+                            col_nota_old = next((c for c in df_old.columns if any(p in str(c).lower() for p in ['n_nota_obs', 'nota', 'nf', 'numero_nota'])), None)
+                            
+                            notas_novas_clean = df_new[col_nota_new].dropna().astype(str).str.replace(r'\.0$', '', regex=True).str.strip().unique()
+                            
+                            # Remove do histórico as notas que estão vindo atualizadas em INC para evitar qualquer duplicação por imprecisão de float
+                            mask_old_sem_duplicar = ~df_old[col_nota_old].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().isin(notas_novas_clean)
+                            df_total = pd.concat([df_old[mask_old_sem_duplicar], df_new], ignore_index=True)
+                            df_total.to_excel(raiz_bi, index=False)
+                            print("[*] Base 'dados_bi.xlsx' unificada com sucesso por Nota Fiscal (sem duplicação de itens).")
                 except Exception as e:
                     print(f"Aviso no merge de dados_bi de INC: {e}")
 
