@@ -247,11 +247,37 @@ def render_kpi_cards(total_pedidos, faturados, pendentes, valor_total):
     st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
 
-def exibir_tela_login(credenciais):
+CREDENCIAIS = {
+    "filipe": {
+        "senha": "Filipe123@@",
+        "perfil": "admin",
+        "nome": "Filipe Marinho"
+    },
+    "admin": {
+        "senha": "Filipe123@@",
+        "perfil": "admin",
+        "nome": "Administrador"
+    },
+    "cliente": {
+        "senha": "inconfidencia2026",
+        "perfil": "cliente",
+        "nome": "Cliente Inconfidência"
+    },
+    "inconfidencia": {
+        "senha": "inconfidencia2026",
+        "perfil": "cliente",
+        "nome": "Cliente Inconfidência"
+    }
+}
+
+
+def exibir_tela_login(credenciais=None):
     """
     Renderiza a interface de login segura e corporativa.
     Oculta a barra lateral até que a autenticação seja concluída.
     """
+    if credenciais is None:
+        credenciais = CREDENCIAIS
     st.markdown("""
     <style>
         [data-testid="stSidebar"] { display: none !important; }

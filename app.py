@@ -7,10 +7,17 @@ Arquitetura Modular de Alta Performance | Motor Analítico DuckDB Colunar C++
 
 import os
 import io
+import sys
+from pathlib import Path
 import datetime
 from PIL import Image
 import streamlit as st
 import pandas as pd
+
+# Garante que a raiz do projeto esteja no sys.path (essencial para o Linux do Streamlit Cloud)
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 # Módulos Especializados da Arquitetura
 from modules.db_manager import (
