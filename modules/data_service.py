@@ -23,13 +23,15 @@ DATA_CORTE = datetime.date(2026, 10, 21)
 
 
 def find_column(df, target_names, partial=False):
-    """Localiza uma coluna de forma insensível a maiúsculas/minúsculas e acentos."""
+    """Localiza uma coluna de forma insensível a maiúsculas/minúsculas, acentos e tuplas (MultiIndex)."""
     if df is None or not hasattr(df, "columns"):
         return None
         
     cols = list(df.columns)
     
     def norm(s):
+        if isinstance(s, tuple):
+            s = " ".join(str(p) for p in s if str(p) and not str(p).startswith("Unnamed"))
         return unidecode(str(s).lower().strip().replace("_", " ").replace(".", " "))
 
     norm_targets = [norm(t) for t in target_names]
@@ -37,14 +39,14 @@ def find_column(df, target_names, partial=False):
     for col in cols:
         c_norm = norm(col)
         for target in norm_targets:
-            if c_norm == target:
+            if c_norm == target or (isinstance(col, tuple) and any(norm(elem) == target for elem in col)):
                 return col
 
     if partial:
         for col in cols:
             c_norm = norm(col)
             for target in norm_targets:
-                if target in c_norm:
+                if target in c_norm or (isinstance(col, tuple) and any(target in norm(elem) for elem in col)):
                     return col
 
     return None
@@ -180,56 +182,87 @@ def processar_planilha_emergencial(df_emergencial, df_unidades=None):
 
 
 def load_uploaded_file(file_obj):
-    """Lê arquivo enviado via upload com suporte a múltiplos formatos e engines."""
+    """Lê arquivo enviado via upload com suporte resiliente a múltiplos formatos, encodings e engines."""
     if file_obj is None:
         return None
     try:
+        filename = ""
         if isinstance(file_obj, str):
             if not os.path.exists(file_obj):
                 return None
-            filename = file_obj
+            filename = os.path.basename(file_obj).lower()
             with open(file_obj, "rb") as f:
                 content = f.read()
         elif hasattr(file_obj, "name"):
-            filename = file_obj.name
+            filename = str(file_obj.name).strip().lower()
             content = file_obj.getvalue() if hasattr(file_obj, "getvalue") else file_obj.read()
         else:
             filename = "dados.xlsx"
             content = file_obj.read()
 
         buf = io.BytesIO(content)
+        df_result = None
 
-        # 1. Tenta Openpyxl
-        try:
-            buf.seek(0)
-            return pd.read_excel(buf, engine="openpyxl")
-        except Exception:
-            pass
+        # 1. Tenta Openpyxl (.xlsx)
+        if filename.endswith(".xlsx") or not filename.endswith(".csv"):
+            try:
+                buf.seek(0)
+                df_result = pd.read_excel(buf, engine="openpyxl")
+            except Exception:
+                pass
 
-        # 2. Tenta Xlrd (formato .xls antigo)
-        try:
-            buf.seek(0)
-            return pd.read_excel(buf, engine="xlrd")
-        except Exception:
-            pass
+        # 2. Tenta Xlrd (.xls antigo)
+        if df_result is None and (filename.endswith(".xls") or not filename.endswith(".csv")):
+            try:
+                buf.seek(0)
+                df_result = pd.read_excel(buf, engine="xlrd")
+            except Exception:
+                pass
 
-        # 3. Tenta HTML / XML Spreadsheet
-        try:
-            buf.seek(0)
-            tabelas = pd.read_html(buf, encoding="utf-8")
-            if tabelas:
-                return tabelas[0]
-        except Exception:
-            pass
+        # 3. Fallback para HTML / XML Spreadsheet (muito comum em ERPs como unidades.xls e listagem_unidades.xls)
+        if df_result is None:
+            for enc in ["latin1", "utf-8", "cp1252", "iso-8859-1"]:
+                try:
+                    buf.seek(0)
+                    tables = pd.read_html(buf, encoding=enc, decimal=",", thousands=".")
+                    if tables:
+                        df_result = max(tables, key=lambda t: t.shape[0] * t.shape[1])
+                        break
+                except Exception:
+                    pass
 
-        # 4. Tenta CSV
-        try:
-            buf.seek(0)
-            return pd.read_csv(buf, sep=None, engine="python", encoding="utf-8")
-        except Exception:
-            pass
+        # 4. Fallback para CSV delimitado
+        if df_result is None:
+            for enc in ["utf-8", "latin1", "cp1252", "iso-8859-1"]:
+                try:
+                    buf.seek(0)
+                    df_result = pd.read_csv(buf, sep=None, engine="python", encoding=enc)
+                    break
+                except Exception:
+                    pass
 
-        return None
+        if df_result is None:
+            return None
+
+        # Padronização e Blindagem dos Cabeçalhos
+        if isinstance(df_result.columns, pd.MultiIndex):
+            # Se for MultiIndex, pega o último nível
+            df_result.columns = df_result.columns.get_level_values(-1)
+
+        # Higieniza espaços e desduplica colunas de mesmo nome
+        cols = []
+        counts = {}
+        for col in df_result.columns:
+            c_str = str(col).strip()
+            if c_str in counts:
+                counts[c_str] += 1
+                cols.append(f"{c_str}_{counts[c_str]}")
+            else:
+                counts[c_str] = 0
+                cols.append(c_str)
+        df_result.columns = cols
+
+        return df_result
     except Exception as e:
         print(f"Erro ao carregar arquivo: {e}")
         return None
@@ -408,6 +441,10 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v9_du
         df_unidades = load_uploaded_file(file_unid_data)
 
     if df_unidades is not None and not df_unidades.empty:
+        if isinstance(df_unidades.columns, pd.MultiIndex):
+            df_unidades.columns = df_unidades.columns.get_level_values(-1)
+        df_unidades.columns = [str(c).strip() for c in df_unidades.columns]
+
         col_ped = find_column(df_unidades, ["Codigo pedido", "pedido", "n_pedido", "codigo_pedido"])
         col_uni = find_column(df_unidades, ["Unidade", "unidade", "nome_unidade", "nome"])
         if not col_ped:
@@ -415,12 +452,23 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v9_du
         if not col_uni:
             col_uni = df_unidades.columns[3] if len(df_unidades.columns) > 3 else df_unidades.columns[-1]
 
-        df_unidades_unique = df_unidades[[col_ped, col_uni]].copy()
-        df_unidades_unique.rename(columns={col_ped: "Pedido", col_uni: "Unidade_Extraida"}, inplace=True)
-        df_unidades_unique["Pedido"] = df_unidades_unique["Pedido"].astype(str).str.strip()
+        ped_series = df_unidades[col_ped]
+        if isinstance(ped_series, pd.DataFrame):
+            ped_series = ped_series.iloc[:, 0]
+
+        uni_series = df_unidades[col_uni]
+        if isinstance(uni_series, pd.DataFrame):
+            uni_series = uni_series.iloc[:, 0]
+
+        df_unidades_unique = pd.DataFrame({
+            "Pedido": ped_series.astype(str).str.strip(),
+            "Unidade_Extraida": uni_series.apply(limpar_texto_corrompido)
+        })
         df_unidades_unique["Pedido_Clean"] = df_unidades_unique["Pedido"].apply(limpar_id)
-        df_unidades_unique["Unidade_Extraida"] = df_unidades_unique["Unidade_Extraida"].apply(limpar_texto_corrompido)
-        df_unidades_unique = df_unidades_unique.drop_duplicates(subset=["Pedido_Clean"], keep="first")
+        df_unidades_unique = df_unidades_unique[df_unidades_unique["Pedido_Clean"] != ""].drop_duplicates(subset=["Pedido_Clean"], keep="first")
+
+        if "Unidade_Extraida" in df_merged.columns:
+            df_merged = df_merged.drop(columns=["Unidade_Extraida"])
 
         df_merged = pd.merge(df_merged, df_unidades_unique[["Pedido_Clean", "Unidade_Extraida"]], on="Pedido_Clean", how="left")
     else:
@@ -739,11 +787,19 @@ def processar_aba_trimestral(df_cad_raw, df_ped_raw):
     if df_cad_raw is None or df_cad_raw.empty or df_ped_raw is None or df_ped_raw.empty:
         return None, None, None, None, None, None
 
-    col_nome_cad = [c for c in df_cad_raw.columns if str(c).strip().lower() in ['nome', 'unidade', 'razao social']][0] if any(str(c).strip().lower() in ['nome', 'unidade', 'razao social'] for c in df_cad_raw.columns) else df_cad_raw.columns[0]
-    col_ativo_cad = [c for c in df_cad_raw.columns if str(c).strip().lower() in ['ativo', 'situacao', 'status']][0] if any(str(c).strip().lower() in ['ativo', 'situacao', 'status'] for c in df_cad_raw.columns) else None
+    if isinstance(df_cad_raw.columns, pd.MultiIndex):
+        df_cad_raw.columns = df_cad_raw.columns.get_level_values(-1)
+    df_cad_raw.columns = [str(c).strip() for c in df_cad_raw.columns]
+
+    if isinstance(df_ped_raw.columns, pd.MultiIndex):
+        df_ped_raw.columns = df_ped_raw.columns.get_level_values(-1)
+    df_ped_raw.columns = [str(c).strip() for c in df_ped_raw.columns]
+
+    col_nome_cad = find_column(df_cad_raw, ["Nome", "unidade", "razao social", "cliente"]) or df_cad_raw.columns[0]
+    col_ativo_cad = find_column(df_cad_raw, ["Ativo", "situacao", "status"])
 
     cols_mestre = [col_nome_cad]
-    if col_ativo_cad:
+    if col_ativo_cad and col_ativo_cad != col_nome_cad:
         cols_mestre.append(col_ativo_cad)
 
     df_unidades = df_cad_raw[cols_mestre].drop_duplicates(subset=[col_nome_cad]).copy()
@@ -756,19 +812,27 @@ def processar_aba_trimestral(df_cad_raw, df_ped_raw):
 
     df_unidades['Unidade_Clean'] = df_unidades['Unidade'].apply(limpar_texto_corrompido)
 
-    if isinstance(df_ped_raw.columns, pd.MultiIndex):
-        df_ped_raw.columns = df_ped_raw.columns.get_level_values(-1)
+    col_data_ped = find_column(df_ped_raw, ["Data", "dt", "data_pedido", "data_emissao"]) or df_ped_raw.columns[0]
+    col_uni_ped = find_column(df_ped_raw, ["Unidade", "nome_unidade", "unidade_entrega"]) or (df_ped_raw.columns[3] if len(df_ped_raw.columns) > 3 else df_ped_raw.columns[-1])
+    col_vlr_ped = find_column(df_ped_raw, ["Valor total", "vendas total", "total", "valor", "vlr_total"]) or (df_ped_raw.columns[9] if len(df_ped_raw.columns) > 9 else df_ped_raw.columns[-1])
 
-    col_data_ped = [c for c in df_ped_raw.columns if 'data' in str(c).lower()][0]
-    col_uni_ped = [c for c in df_ped_raw.columns if 'unidade' in str(c).lower()][0]
-    col_vlr_ped = [c for c in df_ped_raw.columns if any(p in str(c).lower() for p in ['valor total', 'vendas total', 'total'])][0]
+    ped_data_s = df_ped_raw[col_data_ped]
+    if isinstance(ped_data_s, pd.DataFrame): ped_data_s = ped_data_s.iloc[:, 0]
+    
+    ped_uni_s = df_ped_raw[col_uni_ped]
+    if isinstance(ped_uni_s, pd.DataFrame): ped_uni_s = ped_uni_s.iloc[:, 0]
+    
+    ped_vlr_s = df_ped_raw[col_vlr_ped]
+    if isinstance(ped_vlr_s, pd.DataFrame): ped_vlr_s = ped_vlr_s.iloc[:, 0]
 
-    df_pedidos = df_ped_raw[[col_data_ped, col_uni_ped, col_vlr_ped]].copy()
-    df_pedidos.rename(columns={col_uni_ped: 'Unidade'}, inplace=True)
+    df_pedidos = pd.DataFrame({
+        "Data": ped_data_s,
+        "Unidade": ped_uni_s,
+        "Valor": pd.to_numeric(ped_vlr_s, errors="coerce").fillna(0.0)
+    })
     df_pedidos['Unidade_Clean'] = df_pedidos['Unidade'].apply(limpar_texto_corrompido)
-    df_pedidos['Valor'] = pd.to_numeric(df_pedidos[col_vlr_ped], errors='coerce').fillna(0.0)
 
-    dt_parsed = pd.to_datetime(df_pedidos[col_data_ped], errors='coerce', dayfirst=True).dt.normalize()
+    dt_parsed = pd.to_datetime(df_pedidos['Data'], errors='coerce', dayfirst=True).dt.normalize()
 
     hoje = datetime.date.today()
     ano_inicio = hoje.year
@@ -788,7 +852,7 @@ def processar_aba_trimestral(df_cad_raw, df_ped_raw):
         5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto',
         9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'
     }
-    dt_filtrado = pd.to_datetime(df_pedidos[col_data_ped], errors='coerce', dayfirst=True)
+    dt_filtrado = pd.to_datetime(df_pedidos['Data'], errors='coerce', dayfirst=True)
     df_pedidos['AnoMes'] = dt_filtrado.dt.to_period('M')
     df_pedidos['Mes'] = dt_filtrado.dt.month.map(meses_pt)
 
