@@ -861,35 +861,13 @@ def get_mapa_global_unidades():
         except Exception:
             pass
 
-    # 2. Da tabela monitoramento (recorte cirúrgico de 'Local de entrega')
-    if table_exists("monitoramento"):
-        try:
-            df_m = run_query("SELECT * FROM monitoramento")
-            col_loc = next((c for c in df_m.columns if 'entrega' in str(c).lower()), None)
-            if col_loc:
-                df_m['p_ext'] = df_m[col_loc].astype(str).str.extract(r'PED\.?:\s*(\d+)', expand=False)
-                df_m['u_ext'] = df_m[col_loc].apply(extrair_unidade_cirurgica)
-                for _, r in df_m.dropna(subset=['p_ext', 'u_ext']).iterrows():
-                    p = str(r['p_ext']).strip()
-                    u = str(r['u_ext']).strip()
-                    if p and u and not re.search(r'INCONFID[EÊ]NCIA\s+LOCADORA', u, re.I):
-                        mapa[p] = u
-        except Exception:
-            pass
-            
-    # 3. Exceções Manuais Prioritárias
-    mapa.update(EXCECOES_MANUAIS_UNIDADES)
     return mapa
 
 
 # -------------------------------------------------------------------------
-# TABELA DE EXCEÇÕES MANUAIS DE UNIDADES ESPECÍFICAS
+# TABELA DE EXCEÇÕES MANUAIS DE UNIDADES ESPECÍFICAS (DESATIVADAS)
 # -------------------------------------------------------------------------
-EXCECOES_MANUAIS_UNIDADES = {
-    "1232704": "SERPRO - REFATURAMENTO VALOR DE CAFÉ ESTAVA ERRADO",
-    "1234043": "BANRISUL AV DO FORTE - EMITIDO INTERNO POR ERRO DE SISTEMA",
-    "1234574": "GRUPO CABURGO - CITROEN E JAECOO CANOAS"
-}
+EXCECOES_MANUAIS_UNIDADES = {}
 
 
 

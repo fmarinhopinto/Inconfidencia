@@ -19,7 +19,7 @@ from modules.db_manager import (
     EXCECOES_MANUAIS_UNIDADES
 )
 
-DATA_CORTE = datetime.date(2026, 10, 21)
+DATA_CORTE = datetime.date(2026, 11, 1)
 
 
 def find_column(df, target_names, partial=False):
@@ -290,13 +290,17 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v9_du
     Pipeline analítico de alta performance para processamento dos dados do dashboard.
     Lê os dados diretamente do DuckDB persistido e executa deduplicação estrita.
     """
-    # 1. Leitura de Alta Performance via DuckDB
-    if not (isinstance(file_acomp, io.BytesIO) or hasattr(file_acomp, "read")) and table_exists("acompanhamento"):
+    # 1. Leitura de Alta Performance via DuckDB ou Objetos em Memória
+    if isinstance(file_acomp, pd.DataFrame):
+        df_acomp_raw = file_acomp
+    elif not (isinstance(file_acomp, io.BytesIO) or hasattr(file_acomp, "read")) and table_exists("acompanhamento"):
         df_acomp_raw = run_query("SELECT * FROM acompanhamento")
     else:
         df_acomp_raw = load_uploaded_file(file_acomp)
 
-    if not (isinstance(file_bi_data, io.BytesIO) or hasattr(file_bi_data, "read")) and table_exists("dados_bi"):
+    if isinstance(file_bi_data, pd.DataFrame):
+        df_bi_raw = file_bi_data
+    elif not (isinstance(file_bi_data, io.BytesIO) or hasattr(file_bi_data, "read")) and table_exists("dados_bi"):
         df_bi_raw = run_query("SELECT * FROM dados_bi")
     else:
         df_bi_raw = load_uploaded_file(file_bi_data)
@@ -435,7 +439,9 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v9_du
     df_merged["dt_nota_hist"] = np.where(is_faturado, dt_faturado_str, "-")
 
     # 4. Leitura da 3ª Planilha (Unidades)
-    if not (isinstance(file_unid_data, io.BytesIO) or hasattr(file_unid_data, "read")) and table_exists("unidades"):
+    if isinstance(file_unid_data, pd.DataFrame):
+        df_unidades = file_unid_data
+    elif not (isinstance(file_unid_data, io.BytesIO) or hasattr(file_unid_data, "read")) and table_exists("unidades"):
         df_unidades = run_query("SELECT * FROM unidades")
     else:
         df_unidades = load_uploaded_file(file_unid_data)
@@ -497,9 +503,9 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v9_du
 
 def obter_base_consolidada(file_acomp, file_bi, file_unid, uploaded_nf_emergencial=None):
     """
-    Consolida todas as fontes analíticas (Acompanhamento + BI + Unidades + Emergencial)
-    com garantia determinística anti-duplicação, mapeamento cirúrgico de unidades
-    e aplicação das exceções prioritárias manuais.
+    Consolida as fontes analíticas oficiais (Acompanhamento + BI + Unidades)
+    com garantia determinística anti-duplicação e filtro estrito a partir da data de corte (01/11/2026),
+    sem exceções manuais nem registros sintéticos.
     """
     db_mtime = os.path.getmtime(DB_PATH) if os.path.exists(DB_PATH) else 0.0
     mtimes = (
@@ -512,269 +518,19 @@ def obter_base_consolidada(file_acomp, file_bi, file_unid, uploaded_nf_emergenci
         file_acomp, file_bi, file_unid, _mtime=mtimes
     )
 
-    # Identificação da planilha emergencial / monitoramento
-    candidatos_emerg = [
-        'monitoramento.xlsx',
-        'monitoramento.xls',
-        'monitoramento.csv',
-        'nf_emergencial.xlsx',
-        'nf_emergencial.csv',
-        'nf_emergencial.xls',
-        os.path.join('INC', 'monitoramento', 'monitoramento.xlsx')
-    ]
-    file_nf_emergencial_fixo = None
-    for cand in candidatos_emerg:
-        if os.path.exists(cand):
-            file_nf_emergencial_fixo = cand
-            break
-
-    arquivo_nf_emerg_alvo = uploaded_nf_emergencial if uploaded_nf_emergencial is not None else file_nf_emergencial_fixo
-
-    nfs_extras = set()
-    pedidos_extras = set()
-    df_nf_emergencial = None
-    col_nf = None
-
-    if arquivo_nf_emerg_alvo is not None:
-        try:
-            df_emerg = load_uploaded_file(arquivo_nf_emerg_alvo)
-            if df_emerg is not None and not df_emerg.empty:
-                if isinstance(df_emerg.columns, pd.MultiIndex):
-                    df_emerg.columns = df_emerg.columns.get_level_values(-1)
-
-                df_emerg = aplicar_regra_excecao(df_emerg)
-                if 'Pedido' in df_emerg.columns:
-                    df_emerg['Pedido'] = df_emerg['Pedido'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-                df_emerg = processar_planilha_emergencial(df_emerg, df_unidades=df_unidades_unique)
-                df_nf_emergencial = df_emerg
-
-                cols_nf_encontradas = [c for c in df_nf_emergencial.columns if str(c).strip().upper() == 'NF']
-                if not cols_nf_encontradas:
-                    cols_nf_encontradas = [c for c in df_nf_emergencial.columns if any(p in str(c).lower() for p in ['nota', 'nf', 'n_nota', 'numero_nf', 'numero_nota', 'doc', 'fatura'])]
-                col_nf = cols_nf_encontradas[0] if cols_nf_encontradas else df_nf_emergencial.columns[0]
-
-                nfs_extras_clean = (
-                    df_nf_emergencial[col_nf]
-                    .dropna().astype(str)
-                    .str.replace('NF-', '', case=False)
-                    .str.replace(r'\D', '', regex=True)
-                    .str.lstrip('0').str.strip()
-                )
-                nfs_extras_raw = (
-                    df_nf_emergencial[col_nf]
-                    .dropna().astype(str)
-                    .str.replace('NF-', '', case=False)
-                    .str.strip()
-                )
-                nfs_extras = set(nfs_extras_clean[nfs_extras_clean != '']).union(set(nfs_extras_raw[nfs_extras_raw != '']))
-
-                cols_ped = [c for c in df_nf_emergencial.columns if any(p in str(c).lower() for p in ['pedido', 'ped', 'ordem'])]
-                if cols_ped:
-                    vals_ped_raw = df_nf_emergencial[cols_ped[0]].dropna().astype(str).str.strip()
-                    vals_ped_limpos = vals_ped_raw.str.replace(r'\D', '', regex=True).str.lstrip('0')
-                    pedidos_extras = set(vals_ped_raw[vals_ped_raw != '']).union(set(vals_ped_limpos[vals_ped_limpos != '']))
-        except Exception as e:
-            print(f"Aviso leitura emergencial: {e}")
-
-    # Unificação de Faturamento Oficial + Emergencial
-    df_fat_oficial = df_bi_raw.copy() if 'df_bi_raw' in locals() and df_bi_raw is not None else None
-    df_fat_emerg = df_nf_emergencial.copy() if df_nf_emergencial is not None else None
-    df_faturamento_total = pd.DataFrame()
-
-    if df_fat_oficial is not None and not df_fat_oficial.empty:
-        df_faturamento_total = df_fat_oficial.copy()
-
-    if df_fat_emerg is not None and not df_fat_emerg.empty:
-        df_emerg = aplicar_regra_excecao(df_fat_emerg)
-        if df_unidades_unique is not None and not df_unidades_unique.empty and 'Pedido' in df_emerg.columns:
-            df_u = df_unidades_unique.copy()
-            col_ped_u = 'Pedido'
-            col_nome_u = 'Unidade_Extraida'
-            df_u['chave_limpa'] = df_u[col_ped_u].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-            mapa_unidades = df_u[df_u['chave_limpa'] != ''].drop_duplicates(subset=['chave_limpa']).set_index('chave_limpa')[col_nome_u].to_dict()
-            chave_emerg = df_emerg['Pedido'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-            unidade_cruzada = chave_emerg.map(mapa_unidades)
-            df_emerg['Unidade'] = df_emerg['Unidade'].fillna(unidade_cruzada).fillna(df_emerg.get('cidade', 'INCONFIDENCIA LOCADORA'))
-        df_nf_emergencial = df_emerg.copy()
-        df_faturamento_total = pd.concat([df_faturamento_total, df_emerg], ignore_index=True)
-
-    nfs_validas = set()
-    if 'NF_Clean' in df_bi_raw.columns:
-        nfs_validas.update(df_bi_raw['NF_Clean'].dropna().astype(str).str.strip().unique())
-    if 'n_nota_obs' in df_bi_raw.columns:
-        nfs_validas.update(df_bi_raw['n_nota_obs'].dropna().astype(str).str.replace('NF-', '', case=False).str.strip().unique())
-        nfs_validas.update(df_bi_raw['n_nota_obs'].dropna().astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0').unique())
-
-    if not df_faturamento_total.empty:
-        for c_nf in [c for c in df_faturamento_total.columns if any(p in str(c).lower() for p in ['nf', 'nota'])]:
-            nfs_validas.update(df_faturamento_total[c_nf].dropna().astype(str).str.strip().unique())
-            nfs_validas.update(df_faturamento_total[c_nf].dropna().astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0').unique())
-
-    if nfs_extras:
-        nfs_validas.update(nfs_extras)
-
-    # Cruzamento emergencial por chave de pedido
-    if df_nf_emergencial is not None and not df_nf_emergencial.empty:
-        try:
-            cols_chave_cand = [c for c in df_nf_emergencial.columns if any(p in str(c).lower() for p in ['pedido', 'ped', 'ordem'])]
-            chave = cols_chave_cand[0] if cols_chave_cand else None
-            if chave and chave in df_nf_emergencial.columns and col_nf and col_nf in df_nf_emergencial.columns:
-                df_merged['chave_ped_join'] = sanitizar_chave_pedido(df_merged['Pedido'])
-                df_emerg_sub = df_nf_emergencial.dropna(subset=[chave]).copy()
-                df_emerg_sub['chave_ped_join'] = sanitizar_chave_pedido(df_emerg_sub[chave])
-                df_emerg_sub = df_emerg_sub[df_emerg_sub['chave_ped_join'] != ''].drop_duplicates(subset=['chave_ped_join'])
-
-                cols_merge_emerg = ['chave_ped_join', col_nf]
-                tem_unid_emerg = 'Unidade' in df_emerg_sub.columns
-                if tem_unid_emerg:
-                    cols_merge_emerg.append('Unidade')
-
-                df_emerg_sub_slice = df_emerg_sub[cols_merge_emerg].copy()
-                df_emerg_sub_slice.rename(columns={col_nf: 'NF_Emergencial'}, inplace=True)
-                if tem_unid_emerg:
-                    df_emerg_sub_slice.rename(columns={'Unidade': 'Unidade_Emergencial'}, inplace=True)
-
-                df_merged = df_merged.merge(df_emerg_sub_slice, on='chave_ped_join', how='left')
-
-                if 'NF_Emergencial' in df_merged.columns:
-                    mask_tem_emerg = df_merged['NF_Emergencial'].notna() & (df_merged['NF_Emergencial'].astype(str).str.strip() != '')
-                    mask_vazia = df_merged['Nota'].isna() | df_merged['Nota'].astype(str).str.strip().isin(['', '0', 'nan', 'None', '-'])
-                    alvo_nota = mask_vazia & mask_tem_emerg
-                    df_merged.loc[alvo_nota, 'Nota'] = df_merged.loc[alvo_nota, 'NF_Emergencial'].astype(str)
-                    df_merged['NF_Clean'] = df_merged['Nota'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
-                    df_merged.drop(columns=['NF_Emergencial'], inplace=True)
-
-                if 'Unidade_Emergencial' in df_merged.columns:
-                    mask_unid_emerg = df_merged['Unidade_Emergencial'].notna() & (df_merged['Unidade_Emergencial'].astype(str).str.strip() != '')
-                    mask_unid_vazia = df_merged['Unidade_Final'].isna() | df_merged['Unidade_Final'].astype(str).str.strip().isin(['', 'Não Informada', 'nan', 'None', '-'])
-                    alvo_unid = mask_unid_vazia & mask_unid_emerg
-                    df_merged.loc[alvo_unid, 'Unidade_Final'] = df_merged.loc[alvo_unid, 'Unidade_Emergencial'].astype(str)
-                    df_merged['UNIDADE'] = df_merged['Unidade_Final']
-                    df_merged['Unidade'] = df_merged['Unidade_Final']
-                    df_merged['Unidade_Real'] = df_merged['Unidade_Final']
-                    df_merged.drop(columns=['Unidade_Emergencial'], inplace=True)
-
-                df_merged.drop(columns=['chave_ped_join'], inplace=True, errors='ignore')
-        except Exception as e_merge:
-            print(f"Aviso no cruzamento emergencial: {e_merge}")
-
-    # Cruzamento padronizado de status faturado
-    df_merged['NF_limpa'] = df_merged['Nota'].astype(str).str.replace('NF-', '', case=False).str.strip()
-    df_merged['NF_limpa_dig'] = df_merged['Nota'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
-    mask_faturados_combinado = (
-        df_merged['NF_limpa'].isin(nfs_validas) |
-        df_merged['NF_limpa_dig'].isin(nfs_validas) |
-        df_merged['NF_Clean'].isin(nfs_validas)
-    )
-    df_merged.loc[mask_faturados_combinado, 'Status_Faturamento'] = 'Faturado'
-    df_merged.loc[mask_faturados_combinado, 'Status'] = 'Faturado'
-    df_merged.drop(columns=['NF_limpa', 'NF_limpa_dig'], inplace=True, errors='ignore')
-
-    # Liberação da data de corte para registros do período ou faturados no conjunto combinado
+    # Filtro estrito de data de corte: somente pedidos aprovados a partir de 01/11/2026
     serie_dt_corte = pd.to_datetime(df_merged['Dt_inser'], dayfirst=True, errors='coerce').dt.normalize()
     ts_corte = pd.Timestamp(DATA_CORTE).normalize()
-    cond_corte = (serie_dt_corte >= ts_corte) | mask_faturados_combinado
+    df_merged = df_merged[serie_dt_corte >= ts_corte].copy()
 
-    if pedidos_extras:
-        mask_ped = df_merged['Pedido_Clean'].isin(pedidos_extras) | df_merged['Pedido'].astype(str).str.strip().isin(pedidos_extras)
-        cond_corte = cond_corte | mask_ped
-
-    df_merged = df_merged[cond_corte].copy()
-
-    # Adiciona linhas complementares da emergencial
-    if df_nf_emergencial is not None and not df_nf_emergencial.empty:
-        try:
-            df_novas = pd.DataFrame()
-            cols_ped = [c for c in df_nf_emergencial.columns if any(p in str(c).lower() for p in ['pedido', 'ped', 'ordem'])]
-            if cols_ped:
-                df_novas['Pedido'] = df_nf_emergencial[cols_ped[0]].astype(str).str.strip()
-            elif col_nf and col_nf in df_nf_emergencial.columns:
-                df_novas['Pedido'] = "NF-" + df_nf_emergencial[col_nf].astype(str).str.strip()
-            else:
-                df_novas['Pedido'] = [f"EMERG-{i+1}" for i in range(len(df_nf_emergencial))]
-
-            df_novas['Pedido_Clean'] = df_novas['Pedido'].str.replace(r'\D', '', regex=True).str.lstrip('0')
-            df_novas['Nota'] = df_nf_emergencial[col_nf].astype(str).str.strip() if col_nf else df_novas['Pedido']
-            df_novas['NF_Clean'] = df_novas['Nota'].str.replace(r'\D', '', regex=True).str.lstrip('0')
-
-            col_loc_cand = next((c for c in df_nf_emergencial.columns if 'entrega' in str(c).lower() or 'local' in str(c).lower()), None)
-            col_unid_cand = next((c for c in df_nf_emergencial.columns if str(c).strip().lower() in ['unidade', 'unidade_excecao', 'unidade_extraida', 'unidade_final']), None)
-
-            if col_loc_cand:
-                df_novas['UNIDADE'] = df_nf_emergencial[col_loc_cand].apply(extrair_unidade_excecao)
-            elif col_unid_cand:
-                df_novas['UNIDADE'] = df_nf_emergencial[col_unid_cand].astype(str).str.strip()
-            else:
-                df_novas['UNIDADE'] = ""
-
-            mapa_global = get_mapa_global_unidades()
-            mask_unid_gen = (
-                df_novas['UNIDADE'].isna() |
-                df_novas['UNIDADE'].astype(str).str.strip().isin(['', 'nan', 'None', 'Não Informada']) |
-                df_novas['UNIDADE'].astype(str).str.contains(r'INCONFID[EÊ]NCIA\s+LOCADORA', case=False, na=False)
-            )
-            unid_map = df_novas['Pedido_Clean'].map(mapa_global)
-            df_novas.loc[mask_unid_gen & unid_map.notna() & (unid_map != ''), 'UNIDADE'] = unid_map
-
-            df_novas['Unidade_Final'] = df_novas['UNIDADE']
-            df_novas['Unidade'] = df_novas['UNIDADE']
-            df_novas['Unidade_Real'] = df_novas['UNIDADE']
-            df_novas['cidade'] = df_novas['UNIDADE']
-            df_novas['Unidade_Clean'] = df_novas['UNIDADE'].apply(limpar_texto_corrompido)
-
-            cols_dt = [c for c in df_nf_emergencial.columns if any(p in str(c).lower() for p in ['data', 'dt', 'emissao'])]
-            df_novas['Dt_inser'] = df_nf_emergencial[cols_dt[0]].astype(str).str.strip() if cols_dt else DATA_CORTE.strftime("%d/%m/%Y")
-            df_novas['dt_nota_hist'] = df_novas['Dt_inser']
-            df_novas['Status'] = 'Faturado'
-            df_novas['Status_Faturamento'] = 'Faturado'
-            df_novas['Tipo'] = 'Emergencial'
-
-            cols_vlr = [c for c in df_nf_emergencial.columns if any(p in str(c).lower() for p in ['valor', 'total', 'vendas', 'preco'])]
-            df_novas['Vendas Total'] = pd.to_numeric(df_nf_emergencial[cols_vlr[0]], errors='coerce').fillna(0.0) if cols_vlr else 0.0
-
-            cols_qtd = [c for c in df_nf_emergencial.columns if any(p in str(c).lower() for p in ['qtd', 'quantidade', 'quant'])]
-            df_novas['QTD Total'] = pd.to_numeric(df_nf_emergencial[cols_qtd[0]], errors='coerce').fillna(0) if cols_qtd else 1
-
-            df_novas['Data de Inserção'] = df_novas['Dt_inser']
-            df_novas['Valor (R$)'] = df_novas['Vendas Total']
-
-            df_merged = pd.concat([df_merged, df_novas], ignore_index=True)
-
-            if 'Pedido_Clean' in df_merged.columns:
-                df_merged = df_merged.drop_duplicates(subset=['Pedido_Clean'], keep='last')
-            elif 'Pedido' in df_merged.columns:
-                df_merged = df_merged.drop_duplicates(subset=['Pedido'], keep='last')
-        except Exception as err:
-            print(f"Aviso concat emergencial: {err}")
-
-    # Blindagem de Unidades
-    mapa_global = get_mapa_global_unidades()
-    mask_precisa_unidade = (
-        df_merged['Unidade_Final'].isna() |
-        df_merged['Unidade_Final'].astype(str).str.strip().isin(['', 'nan', 'None', 'Não Informada', '-']) |
-        df_merged['Unidade_Final'].astype(str).str.contains(r'INCONFID[EÊ]NCIA\s+LOCADORA', case=False, na=False)
-    )
-    if mask_precisa_unidade.any():
-        unid_resolvida = df_merged['Pedido_Clean'].map(mapa_global)
-        df_merged.loc[mask_precisa_unidade & unid_resolvida.notna() & (unid_resolvida != ''), 'Unidade_Final'] = unid_resolvida
-        col_local_merged = next((c for c in df_merged.columns if 'entrega' in str(c).lower() or 'local' in str(c).lower()), None)
-        if col_local_merged:
-            unid_rec = df_merged[col_local_merged].apply(extrair_unidade_excecao)
-            df_merged.loc[mask_precisa_unidade & unid_rec.notna() & (unid_rec != ''), 'Unidade_Final'] = unid_rec
-        mask_ainda_gen = df_merged['Unidade_Final'].astype(str).str.contains(r'INCONFID[EÊ]NCIA\s+LOCADORA', case=False, na=False)
-        if 'cidade' in df_merged.columns:
-            df_merged.loc[mask_ainda_gen & df_merged['cidade'].notna() & (df_merged['cidade'] != 'Não Informada'), 'Unidade_Final'] = df_merged['cidade']
-
-    # Exceções Manuais Prioritárias
-    for ped_exc, unid_exc in EXCECOES_MANUAIS_UNIDADES.items():
-        mask_exc = (df_merged['Pedido_Clean'] == ped_exc) | (df_merged['Pedido'].astype(str).str.strip() == ped_exc)
-        if mask_exc.any():
-            df_merged.loc[mask_exc, 'Unidade_Final'] = unid_exc
-
+    # Blindagem e sincronização das colunas de unidade
     df_merged['UNIDADE'] = df_merged['Unidade_Final']
     df_merged['Unidade'] = df_merged['Unidade_Final']
     df_merged['Unidade_Real'] = df_merged['Unidade_Final']
     df_merged['Unidade_Clean'] = df_merged['Unidade_Final'].apply(limpar_texto_corrompido)
+
+    nfs_extras = set()
+    pedidos_extras = set()
 
     return df_merged, df_bi_raw, df_unidades_unique, col_ped, col_uni, nfs_extras, pedidos_extras
 

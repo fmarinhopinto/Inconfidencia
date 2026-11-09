@@ -140,17 +140,15 @@ upload_unidades = None
 upload_pedidos = None
 upload_faturamento = None
 upload_controle = None
-upload_emergencial = None
 
 if perfil_atual == "admin":
     with st.sidebar:
         st.markdown("---")
         st.header("📂 Carregamento de Bases")
-        upload_unidades = st.file_uploader("1. Listagem de Unidades (.xlsx/.csv)", type=["xlsx", "xls", "csv"], key="up_unid")
+        upload_unidades = st.file_uploader("1. Listagem de Unidades (.xlsx/.xls/.csv)", type=["xlsx", "xls", "csv"], key="up_unid")
         upload_pedidos = st.file_uploader("2. Relatório de Pedidos / Itens (.xlsx/.csv)", type=["xlsx", "xls", "csv"], key="up_ped")
         upload_faturamento = st.file_uploader("3. Base de Faturamento / BI (.xlsx/.csv)", type=["xlsx", "xls", "csv"], key="up_fat")
-        upload_controle = st.file_uploader("4. Controle de Emissão (.xlsx/.csv)", type=["xlsx", "xls", "csv"], key="up_ctrl")
-        upload_emergencial = st.file_uploader("5. Base Emergencial (NFs Pré-Corte)", type=["xlsx", "xls", "csv"], key="up_emerg")
+        upload_controle = st.file_uploader("4. Controle de Emissão (.xlsx/.xls/.csv)", type=["xlsx", "xls", "csv"], key="up_ctrl")
 
         if st.button("💾 Salvar Bases na Nuvem & DuckDB", use_container_width=True):
             arquivos_salvos = []
@@ -175,18 +173,12 @@ if perfil_atual == "admin":
                 arquivos_salvos.append("3. Base de Faturamento / BI")
 
             if upload_controle is not None:
-                with open("unidades.xlsx", "wb") as f:
+                ext_ctrl = os.path.splitext(upload_controle.name)[1].lower()
+                ext_ctrl = ext_ctrl if ext_ctrl in [".xlsx", ".xls", ".csv"] else ".xlsx"
+                with open(f"unidades{ext_ctrl}", "wb") as f:
                     f.write(upload_controle.getbuffer())
                 ingest_sheet(upload_controle, table_name="unidades", mode="replace")
                 arquivos_salvos.append("4. Controle de Emissão")
-
-            if upload_emergencial is not None:
-                ext_nf = os.path.splitext(upload_emergencial.name)[1].lower()
-                ext_nf = ext_nf if ext_nf in [".xlsx", ".xls", ".csv"] else ".xlsx"
-                with open(f"nf_emergencial{ext_nf}", "wb") as f:
-                    f.write(upload_emergencial.getbuffer())
-                ingest_sheet(upload_emergencial, table_name="nf_emergencial", mode="replace")
-                arquivos_salvos.append("5. Base Emergencial")
 
             if arquivos_salvos:
                 st.cache_data.clear()
@@ -197,7 +189,7 @@ if perfil_atual == "admin":
 
         if st.button("🗑️ Limpar / Resetar Base de Dados", use_container_width=True, type="secondary"):
             reset_database()
-            for fpath in ['acompanhamento.xlsx', 'dados_bi.xlsx', 'unidades.xlsx', 'listagem_unidades.xlsx', 'listagem_unidades.xls', 'listagem_unidades.csv', 'nf_emergencial.xlsx', 'nf_emergencial.xls', 'nf_emergencial.csv']:
+            for fpath in ['acompanhamento.xlsx', 'dados_bi.xlsx', 'unidades.xlsx', 'unidades.xls', 'listagem_unidades.xlsx', 'listagem_unidades.xls', 'listagem_unidades.csv', 'nf_emergencial.xlsx', 'nf_emergencial.xls', 'nf_emergencial.csv']:
                 if os.path.exists(fpath):
                     try: os.remove(fpath)
                     except Exception: pass
@@ -236,8 +228,8 @@ if not (tem_duckdb or tem_arquivos):
     st.stop()
 
 # Execução consolidada de alta performance
-df_merged, df_bi_raw, df_unidades_unique, col_ped, col_uni, nfs_emergenciais, pedidos_emergenciais = obter_base_consolidada(
-    file_acomp, file_bi, file_unid, uploaded_nf_emergencial=upload_emergencial
+df_merged, df_bi_raw, df_unidades_unique, col_ped, col_uni, _, _ = obter_base_consolidada(
+    file_acomp, file_bi, file_unid
 )
 
 # ---------------------------------------------------------
@@ -264,18 +256,10 @@ ts_ini_efetiva = pd.Timestamp(data_ini_efetiva).normalize()
 serie_dt = pd.to_datetime(df_filtrado['Dt_inser'], dayfirst=True, errors='coerce').dt.normalize()
 
 cond_inicio = serie_dt >= ts_ini_efetiva
-if nfs_emergenciais:
-    cond_inicio = cond_inicio | df_filtrado['NF_Clean'].isin(nfs_emergenciais)
-if pedidos_emergenciais:
-    cond_inicio = cond_inicio | df_filtrado['Pedido_Clean'].isin(pedidos_emergenciais)
 
 if data_fim:
     ts_fim = pd.Timestamp(data_fim).normalize()
     cond_fim = serie_dt <= ts_fim
-    if nfs_emergenciais:
-        cond_fim = cond_fim | df_filtrado['NF_Clean'].isin(nfs_emergenciais)
-    if pedidos_emergenciais:
-        cond_fim = cond_fim | df_filtrado['Pedido_Clean'].isin(pedidos_emergenciais)
     df_filtrado = df_filtrado[cond_inicio & cond_fim]
 else:
     df_filtrado = df_filtrado[cond_inicio]

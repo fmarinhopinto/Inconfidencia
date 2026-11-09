@@ -122,12 +122,6 @@ BASES_CONFIG = {
         "tabela": "listagem_unidades",
         "descricao": "Cadastro oficial completo de todas as unidades ativas para o cruzamento trimestral.",
         "colunas_chave": ["Nome", "Ativo", "Data de Cadastro", "Codigo Integracao Cliente"]
-    },
-    "nf_emergencial": {
-        "titulo": "5. Base Emergencial / NFs Pré-Corte",
-        "tabela": "nf_emergencial",
-        "descricao": "Planilha com pedidos e notas fiscais faturadas antes do corte com a coluna 'Local de entrega'.",
-        "colunas_chave": ["Local de entrega", "NF"]
     }
 }
 
