@@ -189,7 +189,7 @@ if perfil_atual == "admin":
 
         if st.button("🗑️ Limpar / Resetar Base de Dados", use_container_width=True, type="secondary"):
             reset_database()
-            for fpath in ['acompanhamento.xlsx', 'dados_bi.xlsx', 'unidades.xlsx', 'unidades.xls', 'listagem_unidades.xlsx', 'listagem_unidades.xls', 'listagem_unidades.csv', 'nf_emergencial.xlsx', 'nf_emergencial.xls', 'nf_emergencial.csv']:
+            for fpath in ['acompanhamento.xlsx', 'dados_bi.xlsx', 'unidades.xlsx', 'unidades.xls', 'listagem_unidades.xlsx', 'listagem_unidades.xls', 'listagem_unidades.csv']:
                 if os.path.exists(fpath):
                     try: os.remove(fpath)
                     except Exception: pass
@@ -228,7 +228,7 @@ if not (tem_duckdb or tem_arquivos):
     st.stop()
 
 # Execução consolidada de alta performance
-df_merged, df_bi_raw, df_unidades_unique, col_ped, col_uni, _, _ = obter_base_consolidada(
+df_merged, df_bi_raw, df_unidades_unique, col_ped, col_uni = obter_base_consolidada(
     file_acomp, file_bi, file_unid
 )
 
@@ -320,23 +320,6 @@ with tab1:
         col_valor: 'Valor (R$)'
     }, inplace=True)
 
-    df_tabela['Data_Formatada'] = pd.to_datetime(df_tabela['Data de Inserção'], errors='coerce', dayfirst=True).dt.normalize()
-    ts_tab_ini = pd.Timestamp(data_ini_efetiva).normalize()
-    cond_tab = df_tabela['Data_Formatada'] >= ts_tab_ini
-    if nfs_emergenciais or pedidos_emergenciais:
-        peds_liberados = df_merged['Pedido'].unique()
-        cond_tab = cond_tab | df_tabela['Pedido'].isin(peds_liberados)
-
-    if data_fim:
-        ts_tab_fim = pd.Timestamp(data_fim).normalize()
-        cond_tab_fim = df_tabela['Data_Formatada'] <= ts_tab_fim
-        if nfs_emergenciais or pedidos_emergenciais:
-            cond_tab_fim = cond_tab_fim | df_tabela['Pedido'].isin(peds_liberados)
-        df_tabela = df_tabela[cond_tab & cond_tab_fim]
-    else:
-        df_tabela = df_tabela[cond_tab]
-
-    df_tabela = df_tabela.drop(columns=['Data_Formatada'], errors='ignore')
     df_tabela['Valor (R$)'] = pd.to_numeric(df_tabela['Valor (R$)'], errors='coerce').fillna(0)
     df_tabela['Valor (R$)'] = df_tabela['Valor (R$)'].apply(format_currency_brl)
     df_tabela['Data de Inserção'] = df_tabela['Data de Inserção'].fillna('-')

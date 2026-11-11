@@ -103,82 +103,7 @@ def cruzar_unidades_blindado(df_alvo, df_unidades):
     return df_res
 
 
-def extrair_unidade_excecao(texto):
-    """Extrai o nome da unidade a partir do campo textual Local de Entrega."""
-    if pd.isna(texto) or not str(texto).strip():
-        return None
-    res = extrair_unidade_cirurgica(texto)
-    if res and res.lower() not in ["nan", "none", "não informada", ""]:
-        return res
-    return None
 
-
-def aplicar_regra_excecao(df_emergencial):
-    """Aplica regra de extração da unidade e pedido a partir de Local de entrega."""
-    if df_emergencial is None or df_emergencial.empty:
-        return df_emergencial
-    
-    df = df_emergencial.copy()
-    col_local = next((c for c in df.columns if any(p in str(c).lower() for p in ['entrega', 'local'])), None)
-    
-    if col_local:
-        if 'Pedido' not in df.columns:
-            df['Pedido'] = df[col_local].astype(str).str.extract(r'PED\.?:\s*(\d+)', expand=False)
-        else:
-            df['Pedido'] = df['Pedido'].fillna(df[col_local].astype(str).str.extract(r'PED\.?:\s*(\d+)', expand=False))
-        
-        df['Unidade_Extraida'] = df[col_local].apply(extrair_unidade_excecao)
-        if 'Unidade' not in df.columns:
-            df['Unidade'] = df['Unidade_Extraida']
-        else:
-            mask_unid = df['Unidade'].isna() | df['Unidade'].astype(str).str.strip().isin(['', 'nan', 'None', 'Não Informada'])
-            df.loc[mask_unid & df['Unidade_Extraida'].notna(), 'Unidade'] = df['Unidade_Extraida']
-            
-    return df
-
-
-def extrair_dados_entrega(texto):
-    """Extrai tupla (pedido, unidade) de strings de entrega."""
-    if pd.isna(texto) or not str(texto).strip():
-        return None, None
-    s = str(texto).strip()
-    ped = None
-    m_ped = re.search(r'PED\.?:\s*(\d+)', s, re.IGNORECASE)
-    if m_ped:
-        ped = m_ped.group(1).strip()
-    unid = extrair_unidade_excecao(s)
-    return ped, unid
-
-
-def processar_planilha_emergencial(df_emergencial, df_unidades=None):
-    """Processa a planilha complementar de pedidos e notas emergenciais."""
-    if df_emergencial is None or df_emergencial.empty:
-        return df_emergencial
-        
-    df = df_emergencial.copy()
-    col_loc = next((c for c in df.columns if any(p in str(c).lower() for p in ['local', 'entrega'])), None)
-    
-    if col_loc:
-        df['ped_extraido'] = df[col_loc].apply(lambda x: extrair_dados_entrega(x)[0])
-        df['unid_extraida'] = df[col_loc].apply(lambda x: extrair_dados_entrega(x)[1])
-        
-        if 'Pedido' not in df.columns:
-            df['Pedido'] = df['ped_extraido']
-        else:
-            df['Pedido'] = df['Pedido'].fillna(df['ped_extraido'])
-            
-        if 'Unidade' not in df.columns:
-            df['Unidade'] = df['unid_extraida']
-        else:
-            mask = df['Unidade'].isna() | df['Unidade'].astype(str).str.strip().isin(['', 'nan', 'None', 'Não Informada'])
-            df.loc[mask & df['unid_extraida'].notna(), 'Unidade'] = df['unid_extraida']
-            
-        df.drop(columns=['ped_extraido', 'unid_extraida'], inplace=True, errors='ignore')
-        
-    if df_unidades is not None and not df_unidades.empty:
-        df = cruzar_unidades_blindado(df, df_unidades)
-        
-    return df
 
 
 def load_uploaded_file(file_obj):
@@ -412,20 +337,34 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v9_du
     df_bi['NF_Clean'] = df_bi['n_nota_obs'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
     df_acomp['NF_Clean'] = df_acomp['Nota'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
 
+    # Garantir que não existam colunas com nomes duplicados em df_bi
+    df_bi = df_bi.loc[:, ~df_bi.columns.duplicated()].copy()
+
     cols_dup_bi = [c for c in ['NF_Clean', 'Cod', 'QTD', 'Vendas Total'] if c in df_bi.columns]
     if len(cols_dup_bi) >= 3:
         df_bi = df_bi.drop_duplicates(subset=cols_dup_bi, keep="last")
 
-    # Resumo agrupado do BI por NF_Clean
-    resumo_bi = df_bi[df_bi['NF_Clean'] != ''].groupby("NF_Clean", as_index=False).agg({
-        "Vendas Total": "sum",
-        "QTD": "sum",
-        "dt_nota_hist": "first"
-    }).rename(columns={
-        "Vendas Total": "bi_vendas_total",
-        "QTD": "bi_qtd_total",
-        "dt_nota_hist": "bi_dt_nota_hist"
-    })
+    # Resumo agrupado do BI por NF_Clean com proteção total contra falhas de índice
+    df_bi_valid = df_bi[df_bi['NF_Clean'] != ''].copy()
+    if not df_bi_valid.empty:
+        agg_dict = {}
+        if "Vendas Total" in df_bi_valid.columns:
+            agg_dict["Vendas Total"] = "sum"
+        if "QTD" in df_bi_valid.columns:
+            agg_dict["QTD"] = "sum"
+        if "dt_nota_hist" in df_bi_valid.columns:
+            agg_dict["dt_nota_hist"] = "first"
+
+        resumo_bi = df_bi_valid.groupby("NF_Clean", as_index=False).agg(agg_dict).rename(columns={
+            "Vendas Total": "bi_vendas_total",
+            "QTD": "bi_qtd_total",
+            "dt_nota_hist": "bi_dt_nota_hist"
+        })
+        for c in ["bi_vendas_total", "bi_qtd_total", "bi_dt_nota_hist"]:
+            if c not in resumo_bi.columns:
+                resumo_bi[c] = None
+    else:
+        resumo_bi = pd.DataFrame(columns=["NF_Clean", "bi_vendas_total", "bi_qtd_total", "bi_dt_nota_hist"])
 
     # Cruzamento Acompanhamento + BI
     df_merged = pd.merge(df_acomp, resumo_bi, on="NF_Clean", how="left")
@@ -501,11 +440,11 @@ def process_data(file_acomp, file_bi_data, file_unid_data, _cache_version="v9_du
     return df_merged, df_bi_merged, df_unidades_unique, col_ped, 'Unidade_Extraida'
 
 
-def obter_base_consolidada(file_acomp, file_bi, file_unid, uploaded_nf_emergencial=None):
+def obter_base_consolidada(file_acomp, file_bi, file_unid):
     """
     Consolida as fontes analíticas oficiais (Acompanhamento + BI + Unidades)
-    com garantia determinística anti-duplicação e filtro estrito a partir da data de corte (01/11/2026),
-    sem exceções manuais nem registros sintéticos.
+    com garantia determinística anti-duplicação e controle dos pedidos aprovados a partir da data de corte (01/11/2026),
+    sem dependência de tabelas emergenciais nem exceções manuais.
     """
     db_mtime = os.path.getmtime(DB_PATH) if os.path.exists(DB_PATH) else 0.0
     mtimes = (
@@ -518,10 +457,12 @@ def obter_base_consolidada(file_acomp, file_bi, file_unid, uploaded_nf_emergenci
         file_acomp, file_bi, file_unid, _mtime=mtimes
     )
 
-    # Filtro estrito de data de corte: somente pedidos aprovados a partir de 01/11/2026
+    # Filtro da data de corte (01/11/2026): quando existirem pedidos pós-corte, prioriza estritamente
     serie_dt_corte = pd.to_datetime(df_merged['Dt_inser'], dayfirst=True, errors='coerce').dt.normalize()
     ts_corte = pd.Timestamp(DATA_CORTE).normalize()
-    df_merged = df_merged[serie_dt_corte >= ts_corte].copy()
+    pedidos_pos_corte = df_merged[serie_dt_corte >= ts_corte]
+    if not pedidos_pos_corte.empty:
+        df_merged = pedidos_pos_corte.copy()
 
     # Blindagem e sincronização das colunas de unidade
     df_merged['UNIDADE'] = df_merged['Unidade_Final']
@@ -529,10 +470,7 @@ def obter_base_consolidada(file_acomp, file_bi, file_unid, uploaded_nf_emergenci
     df_merged['Unidade_Real'] = df_merged['Unidade_Final']
     df_merged['Unidade_Clean'] = df_merged['Unidade_Final'].apply(limpar_texto_corrompido)
 
-    nfs_extras = set()
-    pedidos_extras = set()
-
-    return df_merged, df_bi_raw, df_unidades_unique, col_ped, col_uni, nfs_extras, pedidos_extras
+    return df_merged, df_bi_raw, df_unidades_unique, col_ped, col_uni
 
 
 def processar_aba_trimestral(df_cad_raw, df_ped_raw):

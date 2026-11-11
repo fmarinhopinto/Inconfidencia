@@ -665,9 +665,8 @@ def ingest_default_files_if_needed():
     mapeamento_arquivos = {
         "acompanhamento": os.path.join(BASE_DIR, "acompanhamento.xlsx"),
         "dados_bi": os.path.join(BASE_DIR, "dados_bi.xlsx"),
-        "unidades": os.path.join(BASE_DIR, "unidades.xlsx"),
-        "listagem_unidades": os.path.join(BASE_DIR, "listagem_unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "listagem_unidades.xls")) else os.path.join(BASE_DIR, "listagem_unidades.xlsx"),
-        "nf_emergencial": os.path.join(BASE_DIR, "nf_emergencial.xlsx") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.xlsx")) else (os.path.join(BASE_DIR, "nf_emergencial.csv") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.csv")) else None)
+        "unidades": os.path.join(BASE_DIR, "unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "unidades.xls")) else os.path.join(BASE_DIR, "unidades.xlsx"),
+        "listagem_unidades": os.path.join(BASE_DIR, "listagem_unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "listagem_unidades.xls")) else os.path.join(BASE_DIR, "listagem_unidades.xlsx")
     }
 
     tabelas_ingestao = []
@@ -747,9 +746,7 @@ def sync_files_if_modified(force=False):
         "acompanhamento": os.path.join(BASE_DIR, "acompanhamento.xlsx"),
         "dados_bi": os.path.join(BASE_DIR, "dados_bi.xlsx"),
         "unidades": os.path.join(BASE_DIR, "unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "unidades.xls")) else os.path.join(BASE_DIR, "unidades.xlsx"),
-        "listagem_unidades": os.path.join(BASE_DIR, "listagem_unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "listagem_unidades.xls")) else os.path.join(BASE_DIR, "listagem_unidades.xlsx"),
-        "nf_emergencial": os.path.join(BASE_DIR, "nf_emergencial.xlsx") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.xlsx")) else (os.path.join(BASE_DIR, "nf_emergencial.csv") if os.path.exists(os.path.join(BASE_DIR, "nf_emergencial.csv")) else None),
-        "monitoramento": os.path.join(BASE_DIR, "monitoramento.xlsx") if os.path.exists(os.path.join(BASE_DIR, "monitoramento.xlsx")) else (os.path.join(BASE_DIR, "INC", "monitoramento", "monitoramento.xlsx") if os.path.exists(os.path.join(BASE_DIR, "INC", "monitoramento", "monitoramento.xlsx")) else None)
+        "listagem_unidades": os.path.join(BASE_DIR, "listagem_unidades.xls") if os.path.exists(os.path.join(BASE_DIR, "listagem_unidades.xls")) else os.path.join(BASE_DIR, "listagem_unidades.xlsx")
     }
     
     last_ingestion_map = {}
@@ -844,7 +841,7 @@ def auditar_integridade_bases():
 def get_mapa_global_unidades():
     """
     Retorna um dicionário consolidado { 'Pedido': 'Nome_Real_Unidade' }
-    combinando todas as fontes do DuckDB (unidades, monitoramento, listagem_unidades).
+    combinando as fontes do DuckDB (unidades, listagem_unidades).
     Garante que nenhum pedido fique associado à razão social genérica da Inconfidência.
     """
     mapa = {}
