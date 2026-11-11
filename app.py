@@ -217,7 +217,7 @@ st.sidebar.markdown("---")
 # ---------------------------------------------------------
 file_acomp = upload_pedidos if upload_pedidos is not None else 'acompanhamento.xlsx'
 file_bi = upload_faturamento if upload_faturamento is not None else 'dados_bi.xlsx'
-file_unid = upload_controle if upload_controle is not None else ('unidades.xlsx' if os.path.exists('unidades.xlsx') else ('unidades.xls' if os.path.exists('unidades.xls') else 'unidades.xlsx'))
+file_unid = upload_controle if upload_controle is not None else ('unidades.xls' if os.path.exists('unidades.xls') else ('unidades.xlsx' if os.path.exists('unidades.xlsx') else 'unidades.xls'))
 
 tem_duckdb = table_exists("acompanhamento") and table_exists("dados_bi") and table_exists("unidades")
 tem_unidades_local = os.path.exists('unidades.xlsx') or os.path.exists('unidades.xls')
