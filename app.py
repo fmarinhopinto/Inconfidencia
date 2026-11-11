@@ -322,7 +322,7 @@ with tab1:
 
     df_tabela['Valor (R$)'] = pd.to_numeric(df_tabela['Valor (R$)'], errors='coerce').fillna(0)
     df_tabela['Valor (R$)'] = df_tabela['Valor (R$)'].apply(format_currency_brl)
-    df_tabela['Data de Inserção'] = df_tabela['Data de Inserção'].fillna('-')
+    df_tabela['Data de Inserção'] = pd.to_datetime(df_tabela['Data de Inserção'], errors='coerce', dayfirst=True).dt.strftime('%d/%m/%Y').fillna(df_tabela['Data de Inserção'].fillna('-'))
     df_tabela['Pedido'] = df_tabela['Pedido'].fillna('-')
 
     colunas_exibicao = ['Pedido', 'Unidade', 'Data de Inserção', 'Valor (R$)']
